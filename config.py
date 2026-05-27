@@ -45,6 +45,22 @@ DEAD_ZONE_RATIO = 0.10              # 10% der Framebreite links/rechts = "gerade
 KP = 0.0025                        # Proportionaler Anteil
 KD = 0.0005                        # Differenzialer Anteil (dämpft Überschwingen)
 
+# ── Knick-Erkennung & Geschwindigkeitsanpassung ──────────────────────────────
+# Der Knickwinkel wird aus dem Unterschied zwischen dem nahen und fernen
+# Pfad-Schwerpunkt im ROI berechnet (in Grad).
+#
+#   0°–BEND_SLOW_DEG   → normale Geschwindigkeit
+#   BEND_SLOW_DEG–BEND_STOP_DEG → linear bremsen bis SPEED_MIN_FACTOR
+#   > BEND_STOP_DEG    → Stopp + Ausrichtung (ALIGNING)
+
+BEND_SLOW_DEG     = 15.0           # Ab diesem Winkel: langsamer werden
+BEND_STOP_DEG     = 32.0           # Ab diesem Winkel: Stopp und Ausrichten
+BEND_ALIGN_DEG    =  8.0           # Ausrichtung abgeschlossen wenn Winkel < X°
+SPEED_MIN_FACTOR  =  0.30          # Minimaler Geschwindigkeitsfaktor beim Bremsen
+                                   # (0.30 = 30% der Grundgeschwindigkeit)
+ALIGN_ROTATE_SPD  =  0.22          # Rotationsgeschwindigkeit beim Ausrichten
+ALIGN_TIMEOUT_S   =  6.0           # Maximale Ausrichtungszeit (Sicherheits-Stop)
+
 # ── Verhalten bei Pfadverlust ────────────────────────────────────────────────
 SEARCH_TIMEOUT_S   = 5.0           # Nach X Sekunden ohne Pfad: Suche starten
 SEARCH_ROTATION    = 0.3           # Rotationsgeschwindigkeit beim Suchen
