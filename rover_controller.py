@@ -103,23 +103,23 @@ class RoverController:
             return self.drive(speed, -speed)
 
     def steer(self, base_speed: float, offset_normalized: float,
-              turn_max: float = 0.35, kp: float = 0.0025, kd: float = 0.0005,
+              turn_max: float = 0.35, kp: float = 0.55, kd: float = 0.10,
               prev_error: float = 0.0) -> bool:
         """
-        Lenkt den Rover basierend auf dem Fehler-Offset.
+        Lenkt den Rover basierend auf dem Fehler-Offset (PD-Regler).
 
         Args:
-            base_speed:         Grundgeschwindigkeit
+            base_speed:         Grundgeschwindigkeit (> 0 = vorwärts)
             offset_normalized:  Normalisierter Offset (-1.0 = ganz links, +1.0 = ganz rechts)
-            turn_max:           Maximale Lenkdifferenz
-            kp:                 Proportional-Koeffizient
-            kd:                 Differenzial-Koeffizient
-            prev_error:         Vorheriger Fehler (für D-Anteil)
+            turn_max:           Maximale Lenkdifferenz zwischen links/rechts
+            kp:                 Proportional-Koeffizient  (für Offset -1…+1: ~0.4–0.7)
+            kd:                 Differenzial-Koeffizient  (dämpft Überschwingen)
+            prev_error:         Offset des letzten Frames (für D-Anteil)
 
         Returns:
             True wenn Befehl gesendet wurde.
         """
-        error = offset_normalized
+        error      = offset_normalized
         derivative = error - prev_error
         correction = kp * error + kd * derivative
         correction = self._clamp(correction, -turn_max, turn_max)
@@ -127,7 +127,16 @@ class RoverController:
         left  = base_speed - correction
         right = base_speed + correction
 
-        # Normalisieren damit keine Seite über 1.0 geht
+        # ── Rückwärtsschutz ────────────────────────────────────────────────
+        # Bei Vorwärtsfahrt (base_speed > 0) darf kein Rad rückwärts laufen.
+        # Ohne diese Absicherung kann ein Rad negativ werden, wenn base_speed
+        # durch speed_factor stark reduziert wurde (z.B. 0.12 – 0.35 = -0.23).
+        # Das innere Rad bremst stattdessen auf 0 – der Rover dreht trotzdem.
+        if base_speed > 0:
+            left  = max(0.0, left)
+            right = max(0.0, right)
+
+        # Normalisieren: keine Seite über 1.0
         max_val = max(abs(left), abs(right), 1.0)
         left  /= max_val
         right /= max_val

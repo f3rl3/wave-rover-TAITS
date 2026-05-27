@@ -26,6 +26,7 @@ import cv2
 import time
 import logging
 import sys
+from typing import Optional
 
 from config import (
     CAMERA_INDEX, FRAME_WIDTH, FRAME_HEIGHT, TARGET_FPS,
@@ -34,6 +35,7 @@ from config import (
     KP, KD,
     BEND_STOP_DEG, BEND_ALIGN_DEG,
     ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
+    ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
 )
 from rover_controller import RoverController
@@ -53,6 +55,58 @@ class State:
     ALIGNING  = "ALIGNING"    # Stopp + Ausrichten bei scharfem Knick
     SEARCHING = "SEARCHING"   # Pfad verloren, suchen
     PAUSED    = "PAUSED"      # Manuell pausiert
+
+
+# ── Heading-Tracker ───────────────────────────────────────────────────────────
+class HeadingTracker:
+    """
+    Schätzt die kumulierte Rotation des Rovers seit dem letzten reset().
+
+    Da der Rover keinen Kompass hat, wird die Rotation über
+        gedrehte_Grad = Zeit × ROTATE_DEG_PER_SEC
+    approximiert. Mit dieser Information wird verhindert, dass der Rover
+    durch Überrotation rückwärts fährt:
+
+        ALIGNING : nie mehr als MAX_ALIGN_ROTATION_DEG (< 90°) drehen
+        SEARCHING: pro Richtung nie mehr als MAX_SEARCH_ROTATION_DEG (< 180°)
+
+    Kalibrierung (ROTATE_DEG_PER_SEC in config.py):
+        Rover 5 Sekunden mit turn_in_place drehen lassen,
+        gemessene Grad durch 5 teilen.
+    """
+
+    def __init__(self, deg_per_sec: float):
+        self._dps    = deg_per_sec   # Grad/Sekunde
+        self._accum  = 0.0           # kumulierte Rotation (+ = rechts, - = links)
+        self._last_t: Optional[float] = None
+
+    def reset(self):
+        """Setzt Zähler zurück – markiert aktuelle Richtung als 'vorwärts'."""
+        self._accum  = 0.0
+        self._last_t = None
+
+    def update(self, direction: str, now: float):
+        """
+        Jeden Frame aufrufen solange der Rover dreht.
+        direction: 'left' oder 'right'
+        """
+        if self._last_t is None:
+            self._last_t = now
+            return
+        dt = now - self._last_t
+        self._last_t = now
+        sign = +1.0 if direction == "right" else -1.0
+        self._accum += sign * self._dps * dt
+
+    @property
+    def abs_deg(self) -> float:
+        """Absoluter Betrag der Gesamtrotation seit letztem reset()."""
+        return abs(self._accum)
+
+    @property
+    def signed_deg(self) -> float:
+        """Rotation mit Vorzeichen (+ = rechts, - = links)."""
+        return self._accum
 
 
 # ── Hilfsfunktionen ───────────────────────────────────────────────────────────
@@ -127,9 +181,11 @@ def main():
     prev_error     = 0.0
 
     last_seen_t    = time.time()    # Zeitpunkt: Pfad zuletzt gesehen
-    search_flip_t  = time.time()    # Zeitpunkt: letzte Suchrichtungsumkehr
     align_start_t  = 0.0            # Zeitpunkt: Ausrichtung begonnen
     align_dir      = "left"         # Richtung der aktuellen Ausrichtung
+    search_dir_t   = time.time()    # Zeitpunkt: aktuelle Suchrichtung begonnen
+
+    heading        = HeadingTracker(ROTATE_DEG_PER_SEC)
 
     frame_count    = 0
     fps_t          = time.time()
@@ -159,48 +215,106 @@ def main():
 
             elif state == State.ALIGNING:
                 # ── ALIGNING: Stopp → drehen bis Knick weg ───────────────────
-                elapsed = now - align_start_t
+                #
+                # Rückwärts-Schutz: Rotationslimit über HeadingTracker.
+                # Mehr als MAX_ALIGN_ROTATION_DEG (82°) drehen würde den Rover
+                # über 90° von der Vorwärtsrichtung wegbewegen → rückwärts.
+                # Deshalb: Limit überschritten → sofort zu FOLLOWING, Rotation stoppen.
+
+                heading.update(align_dir, now)
+                elapsed          = now - align_start_t
+                rotated_deg      = heading.abs_deg
 
                 if not result.found:
-                    # Pfad während Ausrichtung verloren → Suche
-                    logger.warning("Pfad während Ausrichtung verloren – wechsle zu SEARCHING")
+                    logger.warning(
+                        "Pfad während Ausrichtung verloren (%.0f° gedreht) – Suche",
+                        rotated_deg
+                    )
+                    heading.reset()
                     state = State.SEARCHING
+                    search_dir   = align_dir          # Suche in gleicher Richtung
+                    search_dir_t = now
                     rover.stop()
-                elif result.bend_angle_deg < BEND_ALIGN_DEG:
-                    # Erfolgreich ausgerichtet
-                    logger.info("✅ Ausgerichtet (Winkel=%.1f°) – weiterfahren", result.bend_angle_deg)
+
+                elif rotated_deg >= MAX_ALIGN_ROTATION_DEG:
+                    # Limit erreicht – weiter drehen würde Rückwärtsfahren verursachen
+                    logger.warning(
+                        "⛔ Rotationslimit (%.0f°/%.0f°) – stoppe Ausrichtung",
+                        rotated_deg, MAX_ALIGN_ROTATION_DEG
+                    )
+                    heading.reset()
                     state      = State.FOLLOWING
                     prev_error = 0.0
-                elif elapsed > ALIGN_TIMEOUT_S:
-                    # Timeout – trotzdem weiterfahren
-                    logger.warning("Ausrichtungs-Timeout (%.1fs) – fahre trotzdem weiter", elapsed)
-                    state = State.FOLLOWING
-                else:
-                    # Weiter drehen in Richtung des Knicks
-                    rover.turn_in_place(ALIGN_ROTATE_SPD, direction=align_dir)
-                    remaining = ALIGN_TIMEOUT_S - elapsed
-                    hud_extra = (f"dreht {align_dir.upper()}  "
-                                 f"Winkel={result.bend_angle_deg:.1f}°  "
-                                 f"Timeout in {remaining:.1f}s")
+                    rover.stop()
 
+                elif result.bend_angle_deg < BEND_ALIGN_DEG:
+                    logger.info(
+                        "✅ Ausgerichtet (Winkel=%.1f°, %.0f° gedreht) – weiterfahren",
+                        result.bend_angle_deg, rotated_deg
+                    )
+                    heading.reset()
+                    state      = State.FOLLOWING
+                    prev_error = 0.0
+
+                elif elapsed > ALIGN_TIMEOUT_S:
+                    logger.warning(
+                        "Ausrichtungs-Timeout (%.1fs, %.0f° gedreht)",
+                        elapsed, rotated_deg
+                    )
+                    heading.reset()
+                    state = State.FOLLOWING
+
+                else:
+                    rover.turn_in_place(ALIGN_ROTATE_SPD, direction=align_dir)
+                    hud_extra = (
+                        f"dreht {align_dir.upper()}  "
+                        f"{rotated_deg:.0f}°/{MAX_ALIGN_ROTATION_DEG:.0f}°  "
+                        f"Knick={result.bend_angle_deg:.1f}°"
+                    )
                     if DEBUG_PRINT_SPEED:
-                        logger.debug("ALIGN  dir=%s  winkel=%.1f°", align_dir, result.bend_angle_deg)
+                        logger.debug(
+                            "ALIGN  dir=%s  rotiert=%.0f°  knick=%.1f°",
+                            align_dir, rotated_deg, result.bend_angle_deg
+                        )
 
             elif state == State.SEARCHING:
                 # ── SEARCHING: Pfad verloren → drehen und suchen ──────────────
+                #
+                # Rückwärts-Schutz: Pro Richtung maximal MAX_SEARCH_ROTATION_DEG
+                # drehen, dann Richtung umkehren. Da MAX_SEARCH_ROTATION_DEG < 180°,
+                # schaut der Rover nie in die Gegenrichtung.
+
+                heading.update(search_dir, now)
+                rotated_deg = heading.abs_deg
+
                 if result.found:
-                    logger.info("Pfad wiedergefunden – weiterfahren")
-                    state      = State.FOLLOWING
+                    logger.info(
+                        "Pfad wiedergefunden (%.0f° gesucht) – weiterfahren",
+                        rotated_deg
+                    )
+                    heading.reset()
+                    state       = State.FOLLOWING
                     last_seen_t = now
                     prev_error  = 0.0
+
+                elif rotated_deg >= MAX_SEARCH_ROTATION_DEG:
+                    # Richtungsumkehr – nie über 150° in eine Richtung
+                    old_dir    = search_dir
+                    search_dir = "right" if search_dir == "left" else "left"
+                    search_dir_t = now
+                    heading.reset()
+                    logger.info(
+                        "Suchlimit %.0f° → Richtung %s → %s",
+                        MAX_SEARCH_ROTATION_DEG, old_dir, search_dir
+                    )
+                    rover.stop()
+
                 else:
-                    # Alle 3 s Richtung wechseln
-                    if now - search_flip_t > 3.0:
-                        search_dir    = "right" if search_dir == "left" else "left"
-                        search_flip_t = now
-                        logger.info("Suchrichtung → %s", search_dir)
                     rover.turn_in_place(SEARCH_ROTATION, direction=search_dir)
-                    hud_extra = f"suche  dir={search_dir.upper()}"
+                    hud_extra = (
+                        f"suche {search_dir.upper()}  "
+                        f"{rotated_deg:.0f}°/{MAX_SEARCH_ROTATION_DEG:.0f}°"
+                    )
 
             else:
                 # ── FOLLOWING: Pfad gefunden → folgen ────────────────────────
@@ -210,7 +324,10 @@ def main():
                         rover.forward(base_speed * 0.4)   # kurz weiterrollen
                     else:
                         logger.info("Pfad verloren (%.1fs) – wechsle zu SEARCHING", lost)
-                        state = State.SEARCHING
+                        state        = State.SEARCHING
+                        search_dir   = SEARCH_DIRECTION   # immer von der konfigurierten Seite starten
+                        search_dir_t = now
+                        heading.reset()                    # Von hier aus maximal 150° suchen
                         rover.stop()
                 else:
                     last_seen_t = now
@@ -224,8 +341,9 @@ def main():
                         state         = State.ALIGNING
                         align_start_t = now
                         align_dir     = result.bend_direction if result.bend_direction != "none" else "left"
+                        heading.reset()    # Aktuelle Richtung = Vorwärts
                         rover.stop()
-                        time.sleep(0.15)   # kurz stehenbleiben bevor Rotation
+                        # KEIN time.sleep() – blockiert den Kontrollloop!
                     else:
                         # Geschwindigkeit anpassen: langsamer bei Kurve
                         current_speed = base_speed * result.speed_factor

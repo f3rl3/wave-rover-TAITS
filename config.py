@@ -42,8 +42,9 @@ SPEED_SEARCH    = 0.25             # Geschwindigkeit beim Suchen (Rotation)
 DEAD_ZONE_RATIO = 0.10              # 10% der Framebreite links/rechts = "gerade"
 
 # PD-Regler Koeffizienten (P = Proportional, D = Differenzial)
-KP = 0.0025                        # Proportionaler Anteil
-KD = 0.0005                        # Differenzialer Anteil (dämpft Überschwingen)
+# offset_normalized ist -1.0…+1.0, daher müssen KP/KD in dieser Größenordnung sein.
+KP = 0.55                          # Proportionaler Anteil  (war 0.0025 → viel zu klein!)
+KD = 0.10                          # Differenzialer Anteil (dämpft Überschwingen)
 
 # ── Knick-Erkennung & Geschwindigkeitsanpassung ──────────────────────────────
 # Der Knickwinkel wird aus dem Unterschied zwischen dem nahen und fernen
@@ -60,6 +61,20 @@ SPEED_MIN_FACTOR  =  0.30          # Minimaler Geschwindigkeitsfaktor beim Brems
                                    # (0.30 = 30% der Grundgeschwindigkeit)
 ALIGN_ROTATE_SPD  =  0.22          # Rotationsgeschwindigkeit beim Ausrichten
 ALIGN_TIMEOUT_S   =  6.0           # Maximale Ausrichtungszeit (Sicherheits-Stop)
+
+# ── Rotations-Tracking (Rückwärtsfahren verhindern) ──────────────────────────
+# Der Rover hat keinen Kompass – die Rotation wird über Zeit × Winkelgeschwindigkeit
+# geschätzt. ROTATE_DEG_PER_SEC kalibrieren: Rover 5s drehen lassen und messen
+# wie viele Grad er sich gedreht hat, dann durch 5 teilen.
+ROTATE_DEG_PER_SEC   = 50.0       # Grad/Sekunde bei turn_in_place (kalibrieren!)
+
+# ALIGNING: Nie mehr als diesen Winkel drehen – sonst rückwärts!
+# Pfadkurven sind max. ~90°, daher ist 82° eine sichere Grenze.
+MAX_ALIGN_ROTATION_DEG = 82.0
+
+# SEARCHING: Pro Richtung maximal diesen Winkel drehen, dann umkehren.
+# < 180° garantiert, dass der Rover nie rückwärts schaut.
+MAX_SEARCH_ROTATION_DEG = 150.0
 
 # ── Verhalten bei Pfadverlust ────────────────────────────────────────────────
 SEARCH_TIMEOUT_S   = 5.0           # Nach X Sekunden ohne Pfad: Suche starten
