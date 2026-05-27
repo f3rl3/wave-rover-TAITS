@@ -4,3 +4,4 @@
 opencv-python>=4.8.0    # Kamera + Computer Vision
 numpy>=1.24.0           # Array-Operationen (kommt mit OpenCV)
 requests>=2.31.0        # HTTP-Kommunikation mit dem Rover
+flask>=3.0.0            # Web-Debug-Dashboard (debug_server.py)

@@ -37,9 +37,11 @@ from config import (
     ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
+    DEBUG_WEB_SERVER, DEBUG_SERVER_PORT, DEBUG_STREAM_FPS,
 )
 from rover_controller import RoverController
 from path_detector    import PathDetector
+from debug_server     import DebugServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -172,6 +174,15 @@ def main():
 
     cap      = open_camera()
     detector = PathDetector()
+
+    # ── Web-Debug-Server starten ──────────────────────────────────────────────
+    debug_srv: Optional[DebugServer] = None
+    if DEBUG_WEB_SERVER:
+        try:
+            debug_srv = DebugServer(port=DEBUG_SERVER_PORT, stream_fps=DEBUG_STREAM_FPS)
+            debug_srv.start()
+        except ImportError as e:
+            logger.warning("Web-Debug deaktiviert: %s", e)
 
     # ── Zustandsvariablen ─────────────────────────────────────────────────────
     state          = State.FOLLOWING
@@ -374,6 +385,31 @@ def main():
             if frame_count % 30 == 0:
                 fps_display = 30.0 / max(now - fps_t, 1e-9)
                 fps_t = now
+
+            # ── Web-Debug-Server aktualisieren ────────────────────────────────
+            if debug_srv is not None:
+                current_speed = base_speed * (result.speed_factor if result.found else 1.0)
+                debug_srv.push(
+                    main_frame=debug_frame,
+                    mask_frame=detector.get_mask_only(frame),
+                    status={
+                        "state":        state,
+                        "speed":        round(base_speed, 3),
+                        "eff_speed":    round(current_speed, 3),
+                        "path_found":   result.found,
+                        "offset":       round(result.offset_normalized, 4) if result.found else 0.0,
+                        "in_dead_zone": result.in_dead_zone,
+                        "area":         round(result.area, 1),
+                        "bend_angle":   round(result.bend_angle_deg, 2) if result.found else 0.0,
+                        "bend_dir":     result.bend_direction if result.found else "none",
+                        "speed_factor": round(result.speed_factor, 3) if result.found else 1.0,
+                        "is_sharp_bend":result.is_sharp_bend if result.found else False,
+                        "heading_deg":  round(heading.abs_deg, 1),
+                        "heading_limit":MAX_ALIGN_ROTATION_DEG,
+                        "fps":          round(fps_display, 1),
+                        "frame_count":  frame_count,
+                    }
+                )
             cv2.putText(debug_frame,
                         f"FPS {fps_display:.1f}",
                         (debug_frame.shape[1] - 95, 25),

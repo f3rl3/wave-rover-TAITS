@@ -26,10 +26,21 @@ GREEN_HSV_HIGH = (85, 255, 255)     # Maximaler Hue, Saturation, Value
 MIN_GREEN_AREA = 2000
 
 # ── Region of Interest (ROI) ─────────────────────────────────────────────────
-# Anteil des Frames der ausgewertet wird (von unten, da Kamera vorwärts schaut)
-# 0.0 = ganz unten, 1.0 = ganzer Frame
-ROI_TOP_RATIO    = 0.55             # ROI beginnt bei 55% der Framehöhe
-ROI_BOTTOM_RATIO = 0.95             # ROI endet bei 95% (etwas Rand lassen)
+# Kamera zeigt NACH UNTEN auf den Boden.
+#
+# Frame-Koordinaten bei nach-unten-gerichteter Kamera:
+#
+#   y=0%  ┌────────────────┐ ← FERN-Zone: Pfad knapp vor dem Rover
+#         │  (voraus)      │
+#   y=40% ├────────────────┤ ← NAH-Zone Anfang
+#         │  (unter Rover) │
+#   y=65% ├────────────────┤ ← NAH-Zone Ende
+#         │  (hinter Rover)│
+#   y=90% └────────────────┘ ← ROI-Ende (unterste 10% = bereits abgefahren)
+#
+# ROI deckt fast den ganzen Frame ab – oben = voraus, unten = bereits hinter dem Rover.
+ROI_TOP_RATIO    = 0.03             # Kleiner Rand oben
+ROI_BOTTOM_RATIO = 0.90             # Unterste 10% abschneiden (bereits abgefahrener Pfad)
 
 # ── Fahrgeschwindigkeiten ────────────────────────────────────────────────────
 # Wave Rover Geschwindigkeiten: -1.0 (rückwärts) bis 1.0 (vorwärts)
@@ -82,6 +93,12 @@ SEARCH_ROTATION    = 0.3           # Rotationsgeschwindigkeit beim Suchen
 SEARCH_DIRECTION   = "left"        # "left" oder "right" – erste Suchrichtung
 
 # ── Debug / Visualisierung ───────────────────────────────────────────────────
-DEBUG_WINDOW      = True           # Kamerabild mit Overlay anzeigen
-DEBUG_SHOW_MASK   = False          # Grün-Maske separat anzeigen
+DEBUG_WINDOW      = False          # OpenCV-Fenster (nur mit Monitor am Pi sinnvoll)
+DEBUG_SHOW_MASK   = False          # Grün-Maske als zweites OpenCV-Fenster
 DEBUG_PRINT_SPEED = True           # Geschwindigkeitswerte in der Konsole ausgeben
+
+# ── Web-Debug-Server ──────────────────────────────────────────────────────────
+# Öffne im Browser:  http://192.168.4.1:5000  (wenn Rover als Hotspot läuft)
+DEBUG_WEB_SERVER  = True           # Web-Dashboard aktivieren
+DEBUG_SERVER_PORT = 5000           # Port des Web-Servers
+DEBUG_STREAM_FPS  = 15             # Stream-FPS (15 reicht, spart Bandbreite)
