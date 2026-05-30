@@ -450,7 +450,7 @@ def main():
                 current_speed = base_speed * (result.speed_factor if result.found else 1.0)
                 debug_srv.push(
                     main_frame=debug_frame,
-                    mask_frame=detector.get_mask_only(frame),
+                    mask_frame=detector.get_last_mask(),
                     status={
                         "state":        state,
                         "speed":        round(base_speed, 3),

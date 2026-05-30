@@ -13,6 +13,8 @@ Wave Rover API-Format (Waveshare UGV / Wave Rover):
 """
 
 import json
+import queue
+import threading
 import time
 import logging
 import requests
@@ -39,6 +41,15 @@ class RoverController:
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
 
+        # HTTP läuft in einem Hintergrund-Thread, damit der Main-Loop nie
+        # durch Netzwerklatenz blockiert wird.
+        # maxsize=1: nur der neueste Befehl zählt, ältere werden verworfen.
+        self._cmd_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._sender = threading.Thread(
+            target=self._sender_loop, name="RoverHTTP", daemon=True
+        )
+        self._sender.start()
+
     # ── Verbindung ─────────────────────────────────────────────────────────
 
     def connect(self) -> bool:
@@ -47,8 +58,8 @@ class RoverController:
         Gibt True zurück wenn erreichbar, sonst False.
         """
         try:
-            # Kurzer Test-Ping mit Stop-Befehl
-            self._send({"T": self.CMD_DRIVE, "L": 0, "R": 0})
+            # Kurzer Test-Ping mit Stop-Befehl (synchron – wir brauchen sofortiges Feedback)
+            self._send_http({"T": self.CMD_DRIVE, "L": 0, "R": 0})
             self._connected = True
             logger.info("✅ Rover verbunden unter %s", ROVER_URL)
             return True
@@ -82,12 +93,11 @@ class RoverController:
         if same_values and within_keepalive:
             return True
 
-        success = self._send({"T": self.CMD_DRIVE, "L": round(left, 3), "R": round(right, 3)})
-        if success:
-            self._last_l = left
-            self._last_r = right
-            self._last_send_t = now
-        return success
+        self._enqueue({"T": self.CMD_DRIVE, "L": round(left, 3), "R": round(right, 3)})
+        self._last_l = left
+        self._last_r = right
+        self._last_send_t = now
+        return True
 
     def forward(self, speed: float = 0.4) -> bool:
         """Geradeaus fahren."""
@@ -156,15 +166,37 @@ class RoverController:
 
     # ── Intern ─────────────────────────────────────────────────────────────
 
-    def _send(self, payload: dict) -> bool:
-        """Sendet JSON-Payload an den Rover. Gibt True bei Erfolg zurück."""
+    def _enqueue(self, payload: dict):
+        """Legt Befehl in die Queue. Bei voller Queue wird der alte Befehl verworfen."""
+        try:
+            self._cmd_queue.put_nowait(payload)
+        except queue.Full:
+            try:
+                self._cmd_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._cmd_queue.put_nowait(payload)
+            except queue.Full:
+                pass
+
+    def _sender_loop(self):
+        """Hintergrund-Thread: wartet auf Befehle und sendet sie per HTTP."""
+        while True:
+            try:
+                payload = self._cmd_queue.get(timeout=1.0)
+                self._send_http(payload)
+            except queue.Empty:
+                pass
+
+    def _send_http(self, payload: dict) -> bool:
+        """Blockierender HTTP-POST. Nur direkt von connect() und _sender_loop() aufgerufen."""
         try:
             resp = self._session.post(
                 ROVER_URL,
                 data=json.dumps(payload),
                 timeout=HTTP_TIMEOUT
             )
-            # Manche Rover-Firmwares antworten mit 200, manche mit anderen Codes
             return resp.status_code < 400
         except requests.exceptions.Timeout:
             logger.debug("HTTP Timeout – Rover beschäftigt?")
@@ -182,8 +214,7 @@ class RoverController:
         return max(min_val, min(max_val, value))
 
     def __del__(self):
-        """Stoppe den Rover beim Beenden des Objekts."""
         try:
-            self.stop()
+            self._send_http({"T": self.CMD_DRIVE, "L": 0, "R": 0})
         except Exception:
             pass
