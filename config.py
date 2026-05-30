@@ -12,9 +12,9 @@ HTTP_TIMEOUT = 0.3                  # Sekunden – kurz halten für Echtzeit-Kon
 
 # ── Kamera ──────────────────────────────────────────────────────────────────
 CAMERA_INDEX   = 0                  # 0 = erste USB-Kamera (Logitech Brio)
-FRAME_WIDTH    = 640                # Auflösung reduzieren für schnellere Verarbeitung
-FRAME_HEIGHT   = 480
-TARGET_FPS     = 30
+FRAME_WIDTH    = 1280                # Auflösung reduzieren für schnellere Verarbeitung
+FRAME_HEIGHT   = 720
+TARGET_FPS     = 60
 
 # ── Grün-Erkennung (HSV-Farbraum) ───────────────────────────────────────────
 # Tipp: Mit dem Debug-Modus die Werte live anpassen
@@ -68,8 +68,8 @@ KD = 0.10                          # Differenzialer Anteil (dämpft Überschwing
 BEND_SLOW_DEG     = 15.0           # Ab diesem Winkel: langsamer werden
 BEND_STOP_DEG     = 32.0           # Ab diesem Winkel: Stopp und Ausrichten
 BEND_ALIGN_DEG    =  8.0           # Ausrichtung abgeschlossen wenn Winkel < X°
-SPEED_MIN_FACTOR  =  0.50          # Minimaler Geschwindigkeitsfaktor beim Bremsen
-                                   # (0.50 = 50% der Grundgeschwindigkeit)
+SPEED_MIN_FACTOR  =  0.30          # Minimaler Geschwindigkeitsfaktor beim Bremsen
+                                   # (0.30 = 30% der Grundgeschwindigkeit)
 ALIGN_ROTATE_SPD  =  0.22          # Rotationsgeschwindigkeit beim Ausrichten
 ALIGN_TIMEOUT_S   =  6.0           # Maximale Ausrichtungszeit (Sicherheits-Stop)
 
