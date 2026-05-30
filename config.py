@@ -5,7 +5,7 @@ Alle Parameter hier anpassen, bevor das Programm gestartet wird.
 """
 
 # ── Rover Netzwerk ──────────────────────────────────────────────────────────
-ROVER_IP   = "192.168.4.1"          # Standard-IP wenn Rover als Hotspot läuft
+ROVER_IP   = "192.168.50.11"          # Standard-IP wenn Rover als Hotspot läuft
 ROVER_PORT = 80
 ROVER_URL  = f"http://{ROVER_IP}:{ROVER_PORT}/js"
 HTTP_TIMEOUT = 0.3                  # Sekunden – kurz halten für Echtzeit-Kontrolle
