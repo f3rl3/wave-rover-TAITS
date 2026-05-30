@@ -92,7 +92,8 @@ class PathDetector:
         self._dead_zone_px = int(FRAME_WIDTH * DEAD_ZONE_RATIO)
         self._roi_y_top:    Optional[int] = None
         self._roi_y_bottom: Optional[int] = None
-        self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        self._last_mask: Optional[np.ndarray] = None   # Cache: Maske des letzten Frames
 
     # ── Öffentliche API ────────────────────────────────────────────────────────
 
@@ -109,11 +110,13 @@ class PathDetector:
         roi_h = self._roi_y_bottom - self._roi_y_top
         roi   = frame[self._roi_y_top:self._roi_y_bottom, :]
 
-        # Grün-Maske
+        # Grün-Maske berechnen und cachen – get_last_mask() greift darauf zu,
+        # ohne die teure HSV-Konvertierung + Morphologie erneut auszuführen.
         hsv  = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self._lower, self._upper)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self._kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel)
+        self._last_mask = mask
 
         # Offset (Lenkung) aus der FERN-Zone
         result = self._calc_offset(mask, w, roi_h)
@@ -124,12 +127,9 @@ class PathDetector:
         debug = self._draw_overlay(frame.copy(), mask, result, w, h, roi_h)
         return result, debug
 
-    def get_mask_only(self, frame: np.ndarray) -> np.ndarray:
-        h, w = frame.shape[:2]
-        self._update_roi(h, w)
-        roi  = frame[self._roi_y_top:self._roi_y_bottom, :]
-        hsv  = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        return cv2.inRange(hsv, self._lower, self._upper)
+    def get_last_mask(self) -> Optional[np.ndarray]:
+        """Gibt die Maske des zuletzt verarbeiteten Frames zurück – ohne Neuberechnung."""
+        return self._last_mask
 
     def update_hsv_range(self, low: tuple, high: tuple):
         self._lower = np.array(low,  dtype=np.uint8)

@@ -12,8 +12,8 @@ HTTP_TIMEOUT = 0.3                  # Sekunden – kurz halten für Echtzeit-Kon
 
 # ── Kamera ──────────────────────────────────────────────────────────────────
 CAMERA_INDEX   = 0                  # 0 = erste USB-Kamera (Logitech Brio)
-FRAME_WIDTH    = 1280                # Auflösung reduzieren für schnellere Verarbeitung
-FRAME_HEIGHT   = 620
+FRAME_WIDTH    = 640                # 640×480 reicht für Pfaderkennung; 1280×620 kostet 3× mehr CPU
+FRAME_HEIGHT   = 480
 TARGET_FPS     = 30
 
 # ── Grün-Erkennung (HSV-Farbraum) ───────────────────────────────────────────
