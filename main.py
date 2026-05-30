@@ -196,6 +196,12 @@ def main():
     align_dir      = "left"         # Richtung der aktuellen Ausrichtung
     search_dir_t   = time.time()    # Zeitpunkt: aktuelle Suchrichtung begonnen
 
+    # Auf welcher Seite des Sichtfeldes der Pfad zuletzt gesehen wurde.
+    # Wird bei jedem Frame aktualisiert solange der Pfad sichtbar ist.
+    # Beim Pfadverlust wird diese Seite als erste Suchrichtung verwendet,
+    # weil der Pfad wahrscheinlich in diese Richtung weitergeht.
+    last_seen_side = SEARCH_DIRECTION  # Fallback: konfigurierter Standardwert
+
     heading        = HeadingTracker(ROTATE_DEG_PER_SEC)
 
     frame_count    = 0
@@ -334,14 +340,23 @@ def main():
                     if lost < SEARCH_TIMEOUT_S * 0.3:
                         rover.forward(base_speed * 0.4)   # kurz weiterrollen
                     else:
-                        logger.info("Pfad verloren (%.1fs) – wechsle zu SEARCHING", lost)
+                        logger.info(
+                            "Pfad verloren (%.1fs) – suche zuerst %s (zuletzt dort gesehen)",
+                            lost, last_seen_side
+                        )
                         state        = State.SEARCHING
-                        search_dir   = SEARCH_DIRECTION   # immer von der konfigurierten Seite starten
+                        search_dir   = last_seen_side      # zur zuletzt gesehenen Seite drehen
                         search_dir_t = now
                         heading.reset()                    # Von hier aus maximal 150° suchen
                         rover.stop()
                 else:
                     last_seen_t = now
+
+                    # Seite merken auf der der Pfad gerade sichtbar ist.
+                    # Nur aktualisieren wenn Pfad merklich links oder rechts ist
+                    # (nicht im toten Bereich), damit das Ergebnis stabil bleibt.
+                    if not result.in_dead_zone:
+                        last_seen_side = "left" if result.offset_normalized < 0 else "right"
 
                     # Scharfer Knick → ALIGNING starten
                     if result.is_sharp_bend:
@@ -404,10 +419,11 @@ def main():
                         "bend_dir":     result.bend_direction if result.found else "none",
                         "speed_factor": round(result.speed_factor, 3) if result.found else 1.0,
                         "is_sharp_bend":result.is_sharp_bend if result.found else False,
-                        "heading_deg":  round(heading.abs_deg, 1),
-                        "heading_limit":MAX_ALIGN_ROTATION_DEG,
-                        "fps":          round(fps_display, 1),
-                        "frame_count":  frame_count,
+                        "heading_deg":    round(heading.abs_deg, 1),
+                        "heading_limit":  MAX_ALIGN_ROTATION_DEG,
+                        "last_seen_side": last_seen_side,
+                        "fps":            round(fps_display, 1),
+                        "frame_count":    frame_count,
                     }
                 )
             cv2.putText(debug_frame,
