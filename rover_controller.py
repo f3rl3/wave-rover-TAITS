@@ -26,9 +26,15 @@ class RoverController:
     CMD_DRIVE = 1   # Motorsteuerungs-Befehlstyp
     CMD_STOP  = 0   # Stop-Befehlstyp (manche Firmware-Versionen)
 
+    # Rover-Firmware stoppt Motoren wenn kein Befehl kommt (Sicherheits-Timeout).
+    # Wir senden deshalb mindestens alle KEEPALIVE_S Sekunden neu, auch bei
+    # identischen Werten – sonst dreht der Rover nur kurz und stoppt dann.
+    KEEPALIVE_S = 0.15
+
     def __init__(self):
         self._last_l = 0.0
         self._last_r = 0.0
+        self._last_send_t = 0.0
         self._connected = False
         self._session = requests.Session()
         self._session.headers.update({"Content-Type": "application/json"})
@@ -67,14 +73,20 @@ class RoverController:
         left  = self._clamp(left)
         right = self._clamp(right)
 
-        # Gleiche Werte nicht erneut senden → reduziert Netzwerklast
-        if abs(left - self._last_l) < 0.0001 and abs(right - self._last_r) < 0.0001:
+        now = time.time()
+        same_values   = abs(left - self._last_l) < 0.001 and abs(right - self._last_r) < 0.001
+        within_keepalive = (now - self._last_send_t) < self.KEEPALIVE_S
+
+        # Überspringen nur wenn Werte gleich UND Keepalive-Intervall noch nicht abgelaufen.
+        # Das Keepalive stellt sicher, dass die Rover-Firmware die Motoren nicht stoppt.
+        if same_values and within_keepalive:
             return True
 
         success = self._send({"T": self.CMD_DRIVE, "L": round(left, 3), "R": round(right, 3)})
         if success:
             self._last_l = left
             self._last_r = right
+            self._last_send_t = now
         return success
 
     def forward(self, speed: float = 0.4) -> bool:
