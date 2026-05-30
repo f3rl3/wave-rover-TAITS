@@ -68,7 +68,7 @@ class RoverController:
         right = self._clamp(right)
 
         # Gleiche Werte nicht erneut senden → reduziert Netzwerklast
-        if abs(left - self._last_l) < 0.01 and abs(right - self._last_r) < 0.01:
+        if abs(left - self._last_l) < 0.0001 and abs(right - self._last_r) < 0.0001:
             return True
 
         success = self._send({"T": self.CMD_DRIVE, "L": round(left, 3), "R": round(right, 3)})
