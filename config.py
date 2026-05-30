@@ -44,9 +44,9 @@ ROI_BOTTOM_RATIO = 0.90             # Unterste 10% abschneiden (bereits abgefahr
 
 # ── Fahrgeschwindigkeiten ────────────────────────────────────────────────────
 # Wave Rover Geschwindigkeiten: -1.0 (rückwärts) bis 1.0 (vorwärts)
-SPEED_FORWARD   = 0.30             # Grundgeschwindigkeit beim Folgen
-SPEED_TURN_MAX  = 0.15             # Maximale Differenz links/rechts beim Lenken
-SPEED_SEARCH    = 0.20             # Geschwindigkeit beim Suchen (Rotation)
+SPEED_FORWARD   = 0.20             # Grundgeschwindigkeit beim Folgen
+SPEED_TURN_MAX  = 0.10             # Maximale Differenz links/rechts beim Lenken
+SPEED_SEARCH    = 0.15             # Geschwindigkeit beim Suchen (Rotation)
 
 # ── Lenkung ──────────────────────────────────────────────────────────────────
 # Toter Bereich um die Mitte – in diesem Bereich fährt der Rover gerade
