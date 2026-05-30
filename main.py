@@ -22,6 +22,7 @@ Tastenkürzel im Debug-Fenster:
     +/-     → Grundgeschwindigkeit erhöhen/verringern
 """
 
+import argparse
 import cv2
 import time
 import logging
@@ -159,9 +160,52 @@ def draw_hud(frame, state: str, speed: float, extra: str = ""):
 
 # ── Hauptprogramm ─────────────────────────────────────────────────────────────
 
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Wave Rover – Grüner Pfad Folger",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Beispiele:\n"
+            "  python main.py                  # Config-Defaults verwenden\n"
+            "  python main.py --no-web         # Web-Dashboard deaktivieren (spart RAM/CPU)\n"
+            "  python main.py --window         # OpenCV-Fenster anzeigen (nur mit Monitor)\n"
+            "  python main.py --no-web --window\n"
+        ),
+    )
+    # BooleanOptionalAction erzeugt automatisch --foo und --no-foo
+    p.add_argument(
+        "--web",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "Web-Debug-Dashboard (Flask) ein-/ausschalten.\n"
+            "Standard aus config.py: %(default)s"
+        ),
+    )
+    p.add_argument(
+        "--window",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "OpenCV-Debug-Fenster ein-/ausschalten (nur mit Monitor am Pi).\n"
+            "Standard aus config.py: %(default)s"
+        ),
+    )
+    return p.parse_args()
+
+
 def main():
+    args = parse_args()
+
+    # Kommandozeile überschreibt config.py, nur wenn Flag explizit gesetzt wurde
+    use_web_server = args.web    if args.web    is not None else DEBUG_WEB_SERVER
+    use_window     = args.window if args.window is not None else DEBUG_WINDOW
+
     logger.info("=" * 55)
     logger.info("  Wave Rover – Grüner Pfad Folger")
+    logger.info("  Web-Dashboard: %s  |  OpenCV-Fenster: %s",
+                "AN" if use_web_server else "AUS",
+                "AN" if use_window     else "AUS")
     logger.info("=" * 55)
 
     # Rover verbinden
@@ -177,7 +221,7 @@ def main():
 
     # ── Web-Debug-Server starten ──────────────────────────────────────────────
     debug_srv: Optional[DebugServer] = None
-    if DEBUG_WEB_SERVER:
+    if use_web_server:
         try:
             debug_srv = DebugServer(port=DEBUG_SERVER_PORT, stream_fps=DEBUG_STREAM_FPS)
             debug_srv.start()
@@ -432,7 +476,7 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
             # ── Debug-Ausgabe ──────────────────────────────────────────────────
-            if DEBUG_WINDOW:
+            if use_window:
                 draw_hud(debug_frame, state, base_speed, hud_extra)
                 cv2.imshow("Wave Rover – Pfadfolger", debug_frame)
 
