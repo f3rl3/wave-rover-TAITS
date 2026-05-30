@@ -12,8 +12,8 @@ HTTP_TIMEOUT = 0.3                  # Sekunden – kurz halten für Echtzeit-Kon
 
 # ── Kamera ──────────────────────────────────────────────────────────────────
 CAMERA_INDEX   = 0                  # 0 = erste USB-Kamera (Logitech Brio)
-FRAME_WIDTH    = 1280                # Auflösung reduzieren für schnellere Verarbeitung
-FRAME_HEIGHT   = 1800
+FRAME_WIDTH    = 3840                # Auflösung reduzieren für schnellere Verarbeitung
+FRAME_HEIGHT   = 1280
 TARGET_FPS     = 30
 
 # ── Grün-Erkennung (HSV-Farbraum) ───────────────────────────────────────────
