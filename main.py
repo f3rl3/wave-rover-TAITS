@@ -228,7 +228,7 @@ def main():
                 # ── ALIGNING: Stopp → drehen bis Knick weg ───────────────────
                 #
                 # Rückwärts-Schutz: Rotationslimit über HeadingTracker.
-                # Mehr als MAX_ALIGN_ROTATION_DEG (82°) drehen würde den Rover
+                # Mehr als MAX_ALIGN_ROTATION_DEG (90°) drehen würde den Rover
                 # über 90° von der Vorwärtsrichtung wegbewegen → rückwärts.
                 # Deshalb: Limit überschritten → sofort zu FOLLOWING, Rotation stoppen.
 

@@ -34,7 +34,7 @@ MIN_GREEN_AREA = 2000
 #         │  (voraus)      │
 #   y=40% ├────────────────┤ ← NAH-Zone Anfang
 #         │  (unter Rover) │
-#   y=65% ├────────────────┤ ← NAH-Zone Ende
+#   y=75% ├────────────────┤ ← NAH-Zone Ende
 #         │  (hinter Rover)│
 #   y=90% └────────────────┘ ← ROI-Ende (unterste 10% = bereits abgefahren)
 #
@@ -68,8 +68,8 @@ KD = 0.10                          # Differenzialer Anteil (dämpft Überschwing
 BEND_SLOW_DEG     = 15.0           # Ab diesem Winkel: langsamer werden
 BEND_STOP_DEG     = 32.0           # Ab diesem Winkel: Stopp und Ausrichten
 BEND_ALIGN_DEG    =  8.0           # Ausrichtung abgeschlossen wenn Winkel < X°
-SPEED_MIN_FACTOR  =  0.30          # Minimaler Geschwindigkeitsfaktor beim Bremsen
-                                   # (0.30 = 30% der Grundgeschwindigkeit)
+SPEED_MIN_FACTOR  =  0.50          # Minimaler Geschwindigkeitsfaktor beim Bremsen
+                                   # (0.50 = 50% der Grundgeschwindigkeit)
 ALIGN_ROTATE_SPD  =  0.22          # Rotationsgeschwindigkeit beim Ausrichten
 ALIGN_TIMEOUT_S   =  6.0           # Maximale Ausrichtungszeit (Sicherheits-Stop)
 
@@ -80,8 +80,8 @@ ALIGN_TIMEOUT_S   =  6.0           # Maximale Ausrichtungszeit (Sicherheits-Stop
 ROTATE_DEG_PER_SEC   = 50.0       # Grad/Sekunde bei turn_in_place (kalibrieren!)
 
 # ALIGNING: Nie mehr als diesen Winkel drehen – sonst rückwärts!
-# Pfadkurven sind max. ~90°, daher ist 82° eine sichere Grenze.
-MAX_ALIGN_ROTATION_DEG = 82.0
+# Pfadkurven sind max. ~90°, daher ist 90° eine sichere Grenze.
+MAX_ALIGN_ROTATION_DEG = 90.0
 
 # SEARCHING: Pro Richtung maximal diesen Winkel drehen, dann umkehren.
 # < 180° garantiert, dass der Rover nie rückwärts schaut.

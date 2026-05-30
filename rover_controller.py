@@ -20,7 +20,6 @@ from config import ROVER_URL, HTTP_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
-
 class RoverController:
     """Steuert den Wave Rover über HTTP."""
 

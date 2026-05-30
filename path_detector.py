@@ -16,7 +16,7 @@ Kamera-Geometrie (nach unten gerichtet):
   ├─────────────────────┤  y ≈ 40%
   │  NAH-Zone           │           → Pfad DIREKT unter dem Rover
   │  (Referenz-Knick)   │           → wird für Knick-Berechnung genutzt
-  ├─────────────────────┤  y ≈ 65%
+  ├─────────────────────┤  y ≈ 75%
   │  (bereits hinter    │
   │   dem Rover)        │           → wird ignoriert (abgefahrener Pfad)
   └─────────────────────┘  y = 90%  (ROI-Ende, konfigurierbar)
@@ -55,7 +55,7 @@ FAR_ZONE_END     = 0.20
 
 # NAH-Zone: mittlerer Streifen = Pfad direkt unter dem Rover
 NEAR_ZONE_START  = 0.40
-NEAR_ZONE_END    = 0.65
+NEAR_ZONE_END    = 0.75
 
 
 @dataclass
