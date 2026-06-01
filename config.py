@@ -81,11 +81,11 @@ ROTATE_DEG_PER_SEC   = 50.0       # Grad/Sekunde bei turn_in_place (kalibrieren!
 
 # ALIGNING: Nie mehr als diesen Winkel drehen – sonst rückwärts!
 # Pfadkurven sind max. ~90°, daher ist 100° eine sichere Grenze.
-MAX_ALIGN_ROTATION_DEG = 150.0
+MAX_ALIGN_ROTATION_DEG = 180.0
 
 # SEARCHING: Pro Richtung maximal diesen Winkel drehen, dann umkehren.
 # < 180° garantiert, dass der Rover nie rückwärts schaut.
-MAX_SEARCH_ROTATION_DEG = 150.0
+MAX_SEARCH_ROTATION_DEG = 180.0
 
 # ── Verhalten bei Pfadverlust ────────────────────────────────────────────────
 SEARCH_TIMEOUT_S   = 5.0           # Nach X Sekunden ohne Pfad: Suche starten
