@@ -613,17 +613,19 @@ def main():
                         # Vollgas-Boost nach Phase-2-Timeout (STRIPE_ALIGN_BOOST_S Sek.)
                         boost_active  = now < timeout_boost_end_t
                         current_speed = base_speed if boost_active else base_speed * result.speed_factor
-                        if result.is_sharp_bend:
-                            logger.info(
-                                "⚠ Scharfer Knick erkannt (%.1f°, %s) – halte an",
-                                result.bend_angle_deg, result.bend_direction
-                            )
-                            state         = State.ALIGNING
-                            align_start_t = now
-                            align_dir     = result.bend_direction if result.bend_direction != "none" else "left"
-                            heading.reset()
-                            rover.stop()
-                        else:
+                        # Scharfer-Knick-Check deaktiviert (ALIGNING-Zustand auskommentiert)
+                        # if result.is_sharp_bend:
+                        #     logger.info(
+                        #         "⚠ Scharfer Knick erkannt (%.1f°, %s) – halte an",
+                        #         result.bend_angle_deg, result.bend_direction
+                        #     )
+                        #     state         = State.ALIGNING
+                        #     align_start_t = now
+                        #     align_dir     = result.bend_direction if result.bend_direction != "none" else "left"
+                        #     heading.reset()
+                        #     rover.stop()
+                        # else:
+                        if True:
                             rover.steer(
                                 current_speed,
                                 result.offset_normalized,
