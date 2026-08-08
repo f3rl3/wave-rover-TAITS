@@ -52,11 +52,23 @@ logger = logging.getLogger(__name__)
 # ── Rot-Erkennung ─────────────────────────────────────────────────────────────
 # Rot liegt im HSV-Farbraum an beiden Rändern (H ≈ 0–10 und H ≈ 165–180),
 # deshalb werden zwei Masken per bitwise_or kombiniert.
-_RED_LOW1  = np.array((  0, 100,  80), dtype=np.uint8)   # unteres Rot
+#
+# Schwellenwerte bewusst STRENG gewählt um Falsch-Positive zu vermeiden:
+#   S ≥ 140 : schließt Brauntöne, Holzböden, Schatten aus (die haben S < 120)
+#   V ≥ 80  : schließt sehr dunkle Oberflächen aus
+#
+# Kalibrierung: Im Debug-Fenster 'R' drücken → Rot-Maske wird angezeigt.
+# Falls Maske zu leer: S schrittweise auf 120, 100 senken.
+# Falls Maske zu voll (Fehldetektionen): S auf 160+ erhöhen.
+_RED_LOW1  = np.array((  0, 140,  80), dtype=np.uint8)   # unteres Rot  (H nahe 0°)
 _RED_HIGH1 = np.array(( 10, 255, 255), dtype=np.uint8)
-_RED_LOW2  = np.array((165, 100,  80), dtype=np.uint8)   # oberes Rot
+_RED_LOW2  = np.array((165, 140,  80), dtype=np.uint8)   # oberes Rot   (H nahe 180°)
 _RED_HIGH2 = np.array((180, 255, 255), dtype=np.uint8)
-MIN_RED_AREA = 4000   # Mindestfläche roter Pixel (Rauschfilter)
+
+# Mindestfläche roter Pixel.
+# Bei 640×480 und ROI≈87% ≈ 267 K Pixel → 10 K = ~3.7 % des Bildes.
+# Ein A4-Blatt auf dem Boden belegt bei typischem Kameraabstand ≥ 15 K Pixel.
+MIN_RED_AREA = 10_000
 
 # ── Zonen-Konstanten (relativ zur ROI-Höhe) ───────────────────────────────────
 # FERN-Zone: oberste 20% des ROI = Pfad knapp vor dem Rover
@@ -164,9 +176,14 @@ class PathDetector:
         mask2 = cv2.inRange(hsv, _RED_LOW2, _RED_HIGH2)
         mask  = cv2.bitwise_or(mask1, mask2)
         mask  = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._kernel)
+        self._last_red_mask = mask
 
         area = int(cv2.countNonZero(mask))
         return area >= MIN_RED_AREA, area
+
+    def get_last_red_mask(self) -> Optional[np.ndarray]:
+        """Gibt die Rot-Maske des letzten detect_red()-Aufrufs zurück (für Debug)."""
+        return getattr(self, "_last_red_mask", None)
 
     def update_hsv_range(self, low: tuple, high: tuple):
         self._lower = np.array(low,  dtype=np.uint8)

@@ -251,6 +251,7 @@ def main():
     base_speed     = SPEED_FORWARD
     search_dir     = SEARCH_DIRECTION
     show_mask      = DEBUG_SHOW_MASK
+    show_red_mask  = False   # R-Taste: Rot-Maske im separaten Fenster anzeigen
     prev_error     = 0.0
 
     last_seen_t    = time.time()    # Zeitpunkt: Pfad zuletzt gesehen
@@ -296,6 +297,10 @@ def main():
             red_detected = False
             if state in (State.FOLLOWING, State.RETURNING):
                 red_detected, red_area_last = detector.detect_red(frame)
+                # Jeden 30. Frame Rohwert loggen – hilft beim Kalibrieren der Schwelle.
+                # "red_area=3200" aber kein Auslösen → Schwelle (MIN_RED_AREA=10000) passt.
+                if frame_count % 30 == 0 and red_area_last > 0:
+                    logger.debug("rot_px=%d  (Schwelle=%d)", red_area_last, 10_000)
 
             # Rote-Markierung-Overlay auf Debug-Frame zeichnen
             if red_detected or (state in (State.RED_STOP, State.TURNING_180, State.TERMINAL)):
@@ -582,10 +587,27 @@ def main():
                 cv2.imshow("Wave Rover – Pfadfolger", debug_frame)
 
                 if show_mask:
-                    cv2.imshow("Grün-Maske", detector.get_mask_only(frame))
+                    cv2.imshow("Gruen-Maske", detector.get_last_mask())
                 else:
                     try:
-                        cv2.destroyWindow("Grün-Maske")
+                        cv2.destroyWindow("Gruen-Maske")
+                    except Exception:
+                        pass
+
+                if show_red_mask:
+                    red_dbg = detector.get_last_red_mask()
+                    if red_dbg is not None:
+                        # Rot-Maske als BGR-Bild einfärben (rot = erkannte Pixel)
+                        red_vis = cv2.cvtColor(red_dbg, cv2.COLOR_GRAY2BGR)
+                        red_vis[red_dbg > 0] = (0, 0, 220)
+                        cv2.putText(red_vis,
+                                    f"Rot-Px: {red_area_last}  Schwelle: 10000",
+                                    (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                                    (255, 255, 255), 1)
+                        cv2.imshow("Rot-Maske (R=schliessen)", red_vis)
+                else:
+                    try:
+                        cv2.destroyWindow("Rot-Maske (R=schliessen)")
                     except Exception:
                         pass
 
@@ -599,6 +621,9 @@ def main():
                     logger.info("Zustand: %s", state)
                 elif key in (ord('m'), ord('M')):
                     show_mask = not show_mask
+                elif key in (ord('r'), ord('R')):
+                    show_red_mask = not show_red_mask
+                    logger.info("Rot-Maske: %s", "AN" if show_red_mask else "AUS")
                 elif key == ord('+'):
                     base_speed = min(0.90, base_speed + 0.05)
                     logger.info("Geschwindigkeit: %.2f", base_speed)
