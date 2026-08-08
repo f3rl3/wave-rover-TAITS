@@ -75,8 +75,10 @@ KD = 0.10                          # Differenzialer Anteil (dämpft Überschwing
 #                       12° = „senkrecht genug". Kleiner → Rover dreht mehr.
 # STRIPE_ALIGN_SPD:     Rotationsgeschwindigkeit beim Auf-der-Stelle-Drehen (Phase 2).
 #                       Analog zu ALIGN_ROTATE_SPD beim Knick-Ausrichten.
-STRIPE_ALIGN_TOL_DEG = 12.0
-STRIPE_ALIGN_SPD     = 0.18          # Drehgeschwindigkeit Phase 2 (0.0–1.0)
+STRIPE_ALIGN_TOL_DEG  = 12.0         # Phase-2-EINGANG  (Grad): dreht wenn Winkel > X°
+STRIPE_ALIGN_EXIT_DEG =  6.0         # Phase-2-AUSGANG  (Grad): fährt weiter wenn Winkel < X°
+STRIPE_ALIGN_TIMEOUT_S = 3.0         # Deadlock-Schutz: nach X Sek. Phase 2 abbrechen
+STRIPE_ALIGN_SPD      =  0.18        # Drehgeschwindigkeit Phase 2 (0.0–1.0)
 
 # Nicht mehr benötigt (wurde durch auf-der-Stelle-Drehen ersetzt):
 # STRIPE_ALIGN_KP      = 0.30
