@@ -1,85 +1,85 @@
-# --- Rover Netzwerk ---
+# --- Rover Network ---
 ROVER_IP   = "192.168.50.11"
 ROVER_PORT = 80
 ROVER_URL  = f"http://{ROVER_IP}:{ROVER_PORT}/js"
 HTTP_TIMEOUT = 0.3
 
-# --- Kamera --- 
-CAMERA_INDEX   = 0                  # 0 = erste USB-Kamera
+# --- Camera ---
+CAMERA_INDEX   = 0                  # 0 = first USB camera
 FRAME_WIDTH    = 640
 FRAME_HEIGHT   = 480
 TARGET_FPS     = 30
 
-# --- Grün-Erkennung (HSV-Farbraum) --- 
-GREEN_HSV_LOW  = (35,  80,  60)     # Minimaler Hue, Saturation, Value
+# --- Green detection (HSV color space) ---
+GREEN_HSV_LOW  = (35,  80,  60)     # Minimum Hue, Saturation, Value
 GREEN_HSV_HIGH = (85, 255, 255)
 
 MIN_GREEN_AREA = 2000 # in Pixel
 
-ROI_TOP_RATIO    = 0.03             # Kleiner Rand oben
-ROI_BOTTOM_RATIO = 0.90             # Unterste 10% abschneiden
+ROI_TOP_RATIO    = 0.03             # Small margin at top
+ROI_BOTTOM_RATIO = 0.90             # Cut off bottom 10%
 
-# --- Fahrgeschwindigkeiten ---
-# Wave Rover Geschwindigkeiten: -1.0 bis 1.0
+# --- Driving speeds ---
+# Wave Rover speeds: -1.0 to 1.0
 SPEED_FORWARD   = 0.20
 SPEED_TURN_MAX  = 0.10
 SPEED_SEARCH    = 0.15
 
-# --- Lenkung ---
-# in diesem Bereich fährt der Rover geradeaus
+# --- Steering ---
+# in this range the rover drives straight
 DEAD_ZONE_RATIO = 0.167
 
-# PD-Regler Koeffizienten
-KP = 0.55                          # Proportionaler Anteil
-KD = 0.10                          # Differenzialer Anteil (dämpft Überschwingen)
+# PD controller coefficients
+KP = 0.55                          # Proportional component
+KD = 0.10                          # Differential component (dampens overshoot)
 
-# --- Streifen-Ausrichtung (Winkelkorrektur) ---
-STRIPE_ALIGN_TOL_DEG  = 12.0         # Phase-2-EINGANG  (Grad): dreht wenn Winkel > X°
-STRIPE_ALIGN_EXIT_DEG =  6.0         # Phase-2-AUSGANG  (Grad): fährt weiter wenn Winkel < X°
-STRIPE_ALIGN_TIMEOUT_S = 1.5         # Deadlock-Schutz: nach X Sek. Phase 2 abbrechen
-STRIPE_ALIGN_BOOST_S   = 1.5         # Nach Timeout: X Sek. volle Geschwindigkeit fahren
-STRIPE_ALIGN_SPD      =  0.18        # Drehgeschwindigkeit Phase 2 (0.0–1.0)
+# --- Stripe alignment (angle correction) ---
+STRIPE_ALIGN_TOL_DEG  = 12.0         # Phase-2 ENTRY  (degrees): rotates when angle > X°
+STRIPE_ALIGN_EXIT_DEG =  6.0         # Phase-2 EXIT  (degrees): continues when angle < X°
+STRIPE_ALIGN_TIMEOUT_S = 1.5         # Deadlock protection: abort Phase 2 after X sec
+STRIPE_ALIGN_BOOST_S   = 1.5         # After timeout: drive at full speed for X sec
+STRIPE_ALIGN_SPD      =  0.18        # Rotation speed Phase 2 (0.0-1.0)
 
-# --- Stuck-Erkennung ---
-# Wenn der Rover X Sekunden lang keine Vorwärtsbewegung macht,
-# wird das Pathfinding komplett zurückgesetzt.
-STUCK_RESET_S = 10.0                 # Sekunden bis Pathfinding-Reset
+# --- Stuck detection ---
+# If the rover makes no forward movement for X seconds,
+# the pathfinding is completely reset.
+STUCK_RESET_S = 10.0                 # Seconds until pathfinding reset
 
-# --- Knick-Erkennung & Geschwindigkeitsanpassung ---
-BEND_SLOW_DEG     = 15.0           # Ab diesem Winkel: langsamer werden
-BEND_STOP_DEG     = 32.0           # Ab diesem Winkel: Stopp und Ausrichten
-BEND_ALIGN_DEG    =  8.0           # Ausrichtung abgeschlossen wenn Winkel < X°
-SPEED_MIN_FACTOR  =  0.30          # Minimaler Geschwindigkeitsfaktor beim Bremsen
-ALIGN_ROTATE_SPD  =  0.22          # Rotationsgeschwindigkeit beim Ausrichten
-ALIGN_TIMEOUT_S   =  6.0           # Maximale Ausrichtungszeit
+# --- Bend detection & speed adjustment ---
+BEND_SLOW_DEG     = 15.0           # From this angle: slow down
+BEND_STOP_DEG     = 32.0           # From this angle: stop and align
+BEND_ALIGN_DEG    =  8.0           # Alignment complete when angle < X°
+SPEED_MIN_FACTOR  =  0.30          # Minimum speed factor when braking
+ALIGN_ROTATE_SPD  =  0.22          # Rotation speed when aligning
+ALIGN_TIMEOUT_S   =  6.0           # Maximum alignment time
 
-# --- Rotations-Tracking ---
-ROTATE_DEG_PER_SEC   = 50.0       # Grad/Sekunde bei turn_in_place
+# --- Rotation tracking ---
+ROTATE_DEG_PER_SEC   = 50.0       # Degrees/second at turn_in_place
 
-# ALIGNING: Nie mehr als diesen Winkel drehen
+# ALIGNING: Never rotate more than this angle
 MAX_ALIGN_ROTATION_DEG = 180.0
 
-# SEARCHING: Pro Richtung maximal diesen Winkel drehen, dann umkehren
+# SEARCHING: Rotate at most this angle per direction, then reverse
 MAX_SEARCH_ROTATION_DEG = 180.0
 
-# --- Verhalten bei Pfadverlust ---
-SEARCH_TIMEOUT_S   = 5.0           # Nach X Sekunden ohne Pfad: Suche starten
-SEARCH_ROTATION    = 0.3           # Rotationsgeschwindigkeit beim Suchen
-SEARCH_DIRECTION   = "left"        # "left" oder "right" – erste Suchrichtung
+# --- Behavior when path is lost ---
+SEARCH_TIMEOUT_S   = 5.0           # After X seconds without path: start search
+SEARCH_ROTATION    = 0.3           # Rotation speed while searching
+SEARCH_DIRECTION   = "left"        # "left" or "right" - initial search direction
 
-# --- Rote Stop-Markierung ---
-RED_STOP_WAIT_S    = 10.0            # Sekunden bis "Signal" empfangen (Dummy)
-TURN_180_SPD       = 0.20            # Rotationsgeschwindigkeit für 180°-Drehung
-RED_DETECT_Y_START = 0.55            # Rot nur im unteren Teil (≥ 55 % Frame-Höhe)
-RED_COOLDOWN_S     = 15.0            # Sekunden Rot-Sperre nach dem Wiederanfahren
+# --- Red stop marking ---
+RED_STOP_WAIT_S    = 10.0            # Seconds until "signal" received (dummy)
+TURN_180_SPD       = 0.20            # Rotation speed for 180° turn
+RED_DETECT_Y_START = 0.55            # Red only in lower part (>= 55% frame height)
+RED_COOLDOWN_S     = 15.0            # Seconds of red lock after restart
 
-# --- Debug / Visualisierung ---
-DEBUG_WINDOW      = False          # OpenCV-Fenster (nur mit Monitor am Pi sinnvoll)
-DEBUG_SHOW_MASK   = False          # Grün-Maske als zweites OpenCV-Fenster
-DEBUG_PRINT_SPEED = True           # Geschwindigkeitswerte in der Konsole ausgeben
+# --- Debug / Visualization ---
+DEBUG_WINDOW      = False          # OpenCV window (only useful with monitor on Pi)
+DEBUG_SHOW_MASK   = False          # Green mask as second OpenCV window
+DEBUG_PRINT_SPEED = True           # Print speed values to console
 
-# --- Web-Debug-Server ---
-# aufrufbar unter: http://192.168.4.1:5000
+# --- Web debug server ---
+# accessible at: http://192.168.4.1:5000
 DEBUG_WEB_SERVER  = True
 DEBUG_SERVER_PORT = 5000
 DEBUG_STREAM_FPS  = 15

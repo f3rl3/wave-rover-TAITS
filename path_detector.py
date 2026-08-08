@@ -17,9 +17,9 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-_RED_LOW1  = np.array((  0, 140,  80), dtype=np.uint8)   # unteres Rot  (H nahe 0°)
+_RED_LOW1  = np.array((  0, 140,  80), dtype=np.uint8)   # lower red  (H near 0°)
 _RED_HIGH1 = np.array(( 10, 255, 255), dtype=np.uint8)
-_RED_LOW2  = np.array((165, 140,  80), dtype=np.uint8)   # oberes Rot   (H nahe 180°)
+_RED_LOW2  = np.array((165, 140,  80), dtype=np.uint8)   # upper red   (H near 180°)
 _RED_HIGH2 = np.array((180, 255, 255), dtype=np.uint8)
 
 MIN_RED_AREA = 10_000
@@ -32,26 +32,26 @@ NEAR_ZONE_END    = 0.75
 class PathResult:
     found: bool
 
-    # --- Offset (Lenkung) ---
-    offset_normalized: float = 0.0   # -1.0 (links) … 0.0 (Mitte) … +1.0 (rechts)
-    centroid_x: Optional[int] = None # Lenkursprung X
-    centroid_y: Optional[int] = None # Y-Position
-    area: float = 0.0                # Gesamtfläche grüner Pixel
-    in_dead_zone: bool = False       # True wenn Offset vernachlässigbar klein
+    # --- Offset (steering) ---
+    offset_normalized: float = 0.0   # -1.0 (left) ... 0.0 (center) ... +1.0 (right)
+    centroid_x: Optional[int] = None # Steering origin X
+    centroid_y: Optional[int] = None # Y-position
+    area: float = 0.0                # Total area of green pixels
+    in_dead_zone: bool = False       # True if offset is negligibly small
 
-    # --- Knick-Erkennung ---
-    bend_angle_deg: float = 0.0      # Knickwinkel in Grad
+    # --- Bend detection ---
+    bend_angle_deg: float = 0.0      # Bend angle in degrees
     bend_direction: str = "none"     # "left", "right", "none"
-    near_cx: Optional[int] = None    # Schwerpunkt NAH-Zone
-    far_cx: Optional[int] = None     # Schwerpunkt FERN-Zone
+    near_cx: Optional[int] = None    # Centroid NEAR zone
+    far_cx: Optional[int] = None     # Centroid FAR zone
     near_found: bool = False
     far_found: bool = False
 
-    # --- Abgeleitete Steuergrößen ---
+    # --- Derived control values ---
     is_sharp_bend: bool = False
     speed_factor: float = 1.0
 
-    # --- Streifen-Ausrichtungswinkel ---
+    # --- Stripe alignment angle ---
     stripe_angle_deg: float = 0.0
 
 class PathDetector:
@@ -62,7 +62,7 @@ class PathDetector:
         self._roi_y_top:    Optional[int] = None
         self._roi_y_bottom: Optional[int] = None
         self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        self._last_mask: Optional[np.ndarray] = None   # Cache: Maske des letzten Frames
+        self._last_mask: Optional[np.ndarray] = None   # Cache: mask of the last frame
 
     # --- API ---
 
@@ -117,7 +117,7 @@ class PathDetector:
         self._lower = np.array(low,  dtype=np.uint8)
         self._upper = np.array(high, dtype=np.uint8)
 
-    # --- Interne Berechnungen ---
+    # --- Internal calculations ---
 
     def _calc_stripe_angle(self, mask: np.ndarray) -> float:
         ys, xs = np.where(mask > 0)
@@ -141,7 +141,7 @@ class PathDetector:
             self._roi_y_bottom = new_bottom
             self._dead_zone_px = int(w * DEAD_ZONE_RATIO)
             logger.debug(
-                "ROI aktualisiert: y=%d…%d  (FERN=top %.0f%%  NAH=%.0f–%.0f%%)",
+                "ROI updated: y=%d...%d  (FAR=top %.0f%%  NEAR=%.0f-%.0f%%)",
                 new_top, new_bottom,
                 FAR_ZONE_END * 100, NEAR_ZONE_START * 100, NEAR_ZONE_END * 100
             )
@@ -209,18 +209,18 @@ class PathDetector:
         result.near_cx = near_cx
         result.far_cx  = far_cx
 
-        # Vertikaler Abstand zwischen Zonen-Mittelpunkten
+        # Vertical distance between zone centroids
         near_cy_roi = near_start + int(M_near["m01"] / near_area)
         far_cy_roi  = int(M_far["m01"] / far_area)
         dy = max(abs(near_cy_roi - far_cy_roi), 1)
 
-        # Knickwinkel & Richtung
+        # Bend angle & direction
         dx = float(far_cx - near_cx)
         angle_deg = math.degrees(math.atan2(abs(dx), dy))
         result.bend_angle_deg = angle_deg
         result.bend_direction = "right" if dx > 0 else ("left" if dx < 0 else "none")
 
-        # Geschwindigkeitsfaktor
+        # Speed factor
         if angle_deg <= BEND_SLOW_DEG:
             result.speed_factor  = 1.0
             result.is_sharp_bend = False
@@ -235,61 +235,61 @@ class PathDetector:
     # --- Debug-Overlay ---
     def _draw_overlay(self, frame: np.ndarray, mask: np.ndarray,
                       result: PathResult, w: int, h: int, roi_h: int) -> np.ndarray:
-        """Zeichnet alle Debug-Overlays (angepasst für nach-unten-Kamera)."""
+        """Draws all debug overlays (adapted for downward-facing camera)."""
 
         rt = self._roi_y_top
         rb = self._roi_y_bottom
 
-        # ROI-Rahmen
+        # ROI frame
         cv2.rectangle(frame, (0, rt), (w, rb), (255, 200, 0), 2)
 
-        # Grün-Maske als transparentes Overlay
+        # Green mask as transparent overlay
         roi_region = frame[rt:rb, :]
         overlay    = np.zeros_like(roi_region)
         overlay[mask > 0] = (0, 255, 0)
         cv2.addWeighted(roi_region, 0.7, overlay, 0.3, 0, dst=frame[rt:rb, :])
 
-        # Mittellinie + toter Bereich
+        # Center line + dead zone
         mid = w // 2
         dz  = self._dead_zone_px
         cv2.line(frame, (mid, rt), (mid, rb), (255, 255, 255), 1, cv2.LINE_AA)
         cv2.line(frame, (mid - dz, rt), (mid - dz, rb), (100, 100, 255), 1)
         cv2.line(frame, (mid + dz, rt), (mid + dz, rb), (100, 100, 255), 1)
 
-        # Zonen-Linien & Labels
+        # Zone lines & labels
         far_y       = rt + int(roi_h * FAR_ZONE_END)
         near_top_y  = rt + int(roi_h * NEAR_ZONE_START)
         near_bot_y  = rt + int(roi_h * NEAR_ZONE_END)
 
-        # FERN-Zone
+        # FAR zone
         cv2.line(frame, (0, far_y), (w, far_y), (255, 80, 80), 1)
-        cv2.putText(frame, "FERN (voraus)", (5, far_y - 4),
+        cv2.putText(frame, "FAR (ahead)", (5, far_y - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 80, 80), 1)
 
-        # NAH-Zone
+        # NEAR zone
         cv2.rectangle(frame, (0, near_top_y), (w, near_bot_y), (50, 160, 220), 1)
-        cv2.putText(frame, "NAH (unter Rover)", (5, near_top_y + 13),
+        cv2.putText(frame, "NEAR (under rover)", (5, near_top_y + 13),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (50, 160, 220), 1)
 
-        # Fahrtrichtungs-Pfeil
+        # Direction of travel arrow
         arr_x = w - 22
         cv2.arrowedLine(frame, (arr_x, rb - 10), (arr_x, rt + 10),
                         (180, 180, 180), 1, tipLength=0.15)
-        cv2.putText(frame, "vor", (arr_x - 12, rt + 8),
+        cv2.putText(frame, "fwd", (arr_x - 12, rt + 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 180), 1)
 
         if result.found:
-            # Lenkursprung
+            # Steering origin
             cv2.drawMarker(frame, (result.centroid_x, result.centroid_y),
                            (0, 255, 255), cv2.MARKER_CROSS, 22, 2)
 
-            # NAH/FERN Schwerpunkte + Pfeil
+            # NEAR/FAR centroids + arrow
             if result.near_cx is not None and result.far_cx is not None:
                 near_cy = (near_top_y + near_bot_y) // 2
                 far_cy  = rt + int(roi_h * FAR_ZONE_END) // 2
 
-                cv2.circle(frame, (result.near_cx, near_cy), 7, (50, 200, 255), -1)  # blau = NAH
-                cv2.circle(frame, (result.far_cx,  far_cy),  7, (255, 80,  80), -1)  # rot  = FERN
+                cv2.circle(frame, (result.near_cx, near_cy), 7, (50, 200, 255), -1)  # blue = NEAR
+                cv2.circle(frame, (result.far_cx,  far_cy),  7, (255, 80,  80), -1)  # red  = FAR
 
                 bend_col = (0, 255, 0) if not result.is_sharp_bend else (0, 0, 255)
                 cv2.arrowedLine(frame,
@@ -297,7 +297,7 @@ class PathDetector:
                                 (result.far_cx,  far_cy),
                                 bend_col, 2, tipLength=0.2)
 
-            # --- Texte ---
+            # --- Text ---
             off_pct = result.offset_normalized * 100
             sf      = result.speed_factor
 
@@ -306,19 +306,19 @@ class PathDetector:
                         (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.62, off_col, 2)
 
             if result.is_sharp_bend:
-                btxt = f"KNICK {result.bend_angle_deg:.1f}° ({result.bend_direction}) ► AUSRICHTEN"
+                btxt = f"BEND {result.bend_angle_deg:.1f}° ({result.bend_direction}) ► ALIGN"
                 bcol = (0, 0, 255)
             elif result.bend_angle_deg > BEND_SLOW_DEG:
-                btxt = f"Kurve {result.bend_angle_deg:.1f}°  Speed x{sf:.2f}"
+                btxt = f"Curve {result.bend_angle_deg:.1f}°  Speed x{sf:.2f}"
                 bcol = (0, 140, 255)
             else:
-                btxt = f"Winkel {result.bend_angle_deg:.1f}°  Speed x{sf:.2f}"
+                btxt = f"Angle {result.bend_angle_deg:.1f}°  Speed x{sf:.2f}"
                 bcol = (180, 255, 180)
 
             cv2.putText(frame, btxt, (10, 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.62, bcol, 2)
 
-            # --- Streifen-Ausrichtungslinie ---
+            # --- Stripe alignment line ---
             angle     = result.stripe_angle_deg
             angle_rad = math.radians(angle)
             lx = math.sin(angle_rad)
@@ -336,7 +336,7 @@ class PathDetector:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                         (0, 220, 220) if result.in_dead_zone else (80, 80, 200), 1)
         else:
-            cv2.putText(frame, "PFAD NICHT GEFUNDEN",
+            cv2.putText(frame, "PATH NOT FOUND",
                         (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
 
         return frame

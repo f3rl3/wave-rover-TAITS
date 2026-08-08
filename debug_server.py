@@ -1,7 +1,7 @@
 """
-Web-Debug-Server für den Wave Rover
+Web debug server for the Wave Rover
 =====================================
-aufrufbar unter: http://192.168.4.1:5000
+accessible at: http://192.168.4.1:5000
 """
 
 import io
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # --- HTML-Dashboard ---
 _HTML = r"""
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -78,7 +78,7 @@ _HTML = r"""
 </head>
 <body>
 <header>
-  <h1>🤖 Wave Rover — Live Debug</h1>
+  <h1>Wave Rover - Live Debug</h1>
   <span id="badge">––</span>
   <span id="fps-hdr">FPS: –</span>
 </header>
@@ -87,35 +87,35 @@ _HTML = r"""
  <div class="sidebar">
 
   <div class="grp">
-   <h3>Fahrt</h3>
-   <div class="row"><span class="lbl">Zustand</span>  <span class="val" id="v-state">–</span></div>
-   <div class="row"><span class="lbl">Basis-Speed</span><span class="val" id="v-speed">–</span></div>
+   <h3>Drive</h3>
+   <div class="row"><span class="lbl">State</span>      <span class="val" id="v-state">–</span></div>
+   <div class="row"><span class="lbl">Base Speed</span> <span class="val" id="v-speed">–</span></div>
    <div class="row"><span class="lbl">Eff. Speed</span> <span class="val" id="v-espeed">–</span></div>
   </div>
 
   <div class="grp">
-   <h3>Pfad</h3>
-   <div class="row"><span class="lbl">Erkannt</span><span class="val" id="v-found">–</span></div>
-   <div class="row"><span class="lbl">Offset</span> <span class="val" id="v-offset">–</span></div>
+   <h3>Path</h3>
+   <div class="row"><span class="lbl">Detected</span><span class="val" id="v-found">–</span></div>
+   <div class="row"><span class="lbl">Offset</span>  <span class="val" id="v-offset">–</span></div>
    <div class="bar-wrap">
      <div class="bar-mid"></div>
      <div class="bar-fill" id="bar-fill" style="left:50%;width:0"></div>
    </div>
-   <div class="row"><span class="lbl">Fläche</span><span class="val" id="v-area">–</span></div>
-   <div class="row"><span class="lbl">Toter Ber.</span><span class="val" id="v-dz">–</span></div>
+   <div class="row"><span class="lbl">Area</span>    <span class="val" id="v-area">–</span></div>
+   <div class="row"><span class="lbl">Dead Zone</span><span class="val" id="v-dz">–</span></div>
   </div>
 
   <div class="grp">
-   <h3>Knick-Erkennung</h3>
-   <div class="row"><span class="lbl">Winkel</span>    <span class="val" id="v-bend">–</span></div>
-   <div class="row"><span class="lbl">Richtung</span>  <span class="val" id="v-bdir">–</span></div>
-   <div class="row"><span class="lbl">Speed-Fakt.</span><span class="val" id="v-sf">–</span></div>
-   <div class="row"><span class="lbl">Scharfer Knick</span><span class="val" id="v-sharp">–</span></div>
+   <h3>Bend Detection</h3>
+   <div class="row"><span class="lbl">Angle</span>       <span class="val" id="v-bend">–</span></div>
+   <div class="row"><span class="lbl">Direction</span>   <span class="val" id="v-bdir">–</span></div>
+   <div class="row"><span class="lbl">Speed Factor</span><span class="val" id="v-sf">–</span></div>
+   <div class="row"><span class="lbl">Sharp Bend</span>  <span class="val" id="v-sharp">–</span></div>
   </div>
 
   <div class="grp">
-   <h3>Heading (Rückwärts-Schutz)</h3>
-   <div class="row"><span class="lbl">Gedreht</span><span class="val" id="v-hdeg">–</span></div>
+   <h3>Heading (Backward Protection)</h3>
+   <div class="row"><span class="lbl">Rotated</span><span class="val" id="v-hdeg">–</span></div>
    <div class="row"><span class="lbl">Limit</span>  <span class="val" id="v-hlim">–</span></div>
    <div class="arc-wrap"><canvas id="arc-canvas" width="100" height="60"></canvas></div>
   </div>
@@ -132,12 +132,12 @@ _HTML = r"""
 
  <div class="streams">
   <div class="sbox">
-   <div class="slbl">📷 Kamera mit Overlays</div>
-   <img src="/stream/main" alt="Kamera-Stream">
+   <div class="slbl">Camera with Overlays</div>
+   <img src="/stream/main" alt="Camera Stream">
   </div>
   <div class="sbox">
-   <div class="slbl">🟢 Grün-Erkennungsmaske</div>
-   <img src="/stream/mask" alt="Masken-Stream">
+   <div class="slbl">Green Detection Mask</div>
+   <img src="/stream/mask" alt="Mask Stream">
   </div>
  </div>
 </div>
@@ -200,7 +200,7 @@ async function poll(){
 
     const found=d.path_found;
     const fEl=document.getElementById('v-found');
-    fEl.textContent=found?'JA ✓':'NEIN ✗';
+    fEl.textContent=found?'YES':'NO';
     fEl.className='val '+(found?'good':'bad');
 
     const off=d.offset??0;
@@ -218,7 +218,7 @@ async function poll(){
 
     set('v-area',   d.area!=null ? Math.round(d.area).toLocaleString()+' px²' : '–');
     const dzEl=document.getElementById('v-dz');
-    dzEl.textContent=d.in_dead_zone?'JA':'NEIN';
+    dzEl.textContent=d.in_dead_zone?'YES':'NO';
     dzEl.className='val '+(d.in_dead_zone?'good':'');
 
     const bend=d.bend_angle??0;
@@ -227,7 +227,7 @@ async function poll(){
     set('v-bdir',  d.bend_dir||'–');
     set('v-sf',    d.speed_factor!=null ? 'x'+d.speed_factor.toFixed(2) : '–');
     const shEl=document.getElementById('v-sharp');
-    shEl.textContent=d.is_sharp_bend?'JA ⚠':'NEIN';
+    shEl.textContent=d.is_sharp_bend?'YES':'NO';
     shEl.className='val '+(d.is_sharp_bend?'bad':'good');
 
     const hdeg=d.heading_deg??0;
@@ -285,8 +285,8 @@ class DebugServer:
     def __init__(self, port: int = 5000, stream_fps: int = 15):
         if not _FLASK_OK:
             raise ImportError(
-                "Flask nicht installiert. "
-                "Installieren mit:  pip install flask"
+                "Flask not installed. "
+                "Install with:  pip install flask"
             )
         
         self._port       = port
@@ -306,7 +306,7 @@ class DebugServer:
         )
         self._thread.start()
         logger.info(
-            "Debug-Dashboard erreichbar unter  http://<rover-ip>:%d", self._port
+            "Debug dashboard accessible at  http://<rover-ip>:%d", self._port
         )
 
     def push(self,
@@ -326,7 +326,7 @@ class DebugServer:
 
         self._status.push(status)
 
-    # --- Flask-App aufbauen ---
+    # --- Build Flask app ---
     def _build_app(self) -> Flask:
         app = Flask(__name__)
         import logging as _lg
@@ -358,7 +358,7 @@ class DebugServer:
 
     # --- MJPEG-Generator ---
     def _mjpeg_generator(self, buf: _FrameBuffer):
-        """Generator der JPEG-Frames als MJPEG-Stream liefert."""
+        """Generator that delivers JPEG frames as an MJPEG stream."""
         last_t = 0.0
         placeholder = self._make_placeholder()
 
@@ -386,14 +386,14 @@ class DebugServer:
 
     @staticmethod
     def _make_placeholder() -> np.ndarray:
-        """Platzhalterbild wenn noch kein Frame vorhanden."""
+        """Placeholder image when no frame is available yet."""
         img = np.zeros((240, 320, 3), dtype=np.uint8)
         img[:] = (30, 30, 30)
-        cv2.putText(img, "Warte auf Kamera...", (20, 120),
+        cv2.putText(img, "Waiting for camera...", (20, 120),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 100), 1)
         return img
 
-    # --- Server-Thread ---
+    # --- Server thread ---
     def _run(self):
         self._app.run(
             host="0.0.0.0",
