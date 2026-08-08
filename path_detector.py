@@ -45,6 +45,7 @@ from config import (
     DEAD_ZONE_RATIO,
     FRAME_WIDTH, FRAME_HEIGHT,
     BEND_SLOW_DEG, BEND_STOP_DEG, SPEED_MIN_FACTOR,
+    RED_DETECT_Y_START,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,7 +170,14 @@ class PathDetector:
         h, w = frame.shape[:2]
         self._update_roi(h, w)
 
-        roi = frame[self._roi_y_top:self._roi_y_bottom, :]
+        # Rot wird nur im UNTEREN Teil des Frames gesucht (RED_DETECT_Y_START).
+        # Kamera zeigt nach unten: y > 55 % = direkt unter / leicht hinter Rover.
+        # So hält der Rover erst an wenn er physisch AUF der Markierung steht,
+        # nicht schon wenn die Markierung am oberen Bildrand (= weit voraus) auftaucht.
+        red_y_start = int(h * RED_DETECT_Y_START)
+        red_y_end   = self._roi_y_bottom          # bleibt ROI-Untergrenze (90 %)
+        roi = frame[red_y_start:red_y_end, :]
+
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
         mask1 = cv2.inRange(hsv, _RED_LOW1, _RED_HIGH1)

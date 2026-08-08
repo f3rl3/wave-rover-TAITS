@@ -45,7 +45,7 @@ from config import (
     BEND_STOP_DEG, BEND_ALIGN_DEG,
     ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
-    RED_STOP_WAIT_S, TURN_180_SPD,
+    RED_STOP_WAIT_S, TURN_180_SPD, RED_COOLDOWN_S,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
     DEBUG_WEB_SERVER, DEBUG_SERVER_PORT, DEBUG_STREAM_FPS,
 )
@@ -269,9 +269,10 @@ def main():
     #   → FOLLOWING  während der Hinfahrt
     #   → RETURNING  während der Rückfahrt
     # So folgen Ausrichtung und Suche automatisch dem richtigen Modus.
-    follow_state   = State.FOLLOWING  # aktueller Fahr-Modus (ändert sich bei Rückfahrt)
-    red_stop_t     = 0.0              # Zeitpunkt: erste rote Markierung gesehen
-    red_area_last  = 0                # Größe der zuletzt erkannten roten Fläche (Debug)
+    follow_state      = State.FOLLOWING  # aktueller Fahr-Modus (ändert sich bei Rückfahrt)
+    red_stop_t        = 0.0              # Zeitpunkt: erste rote Markierung gesehen
+    red_area_last     = 0                # Größe der zuletzt erkannten roten Fläche (Debug)
+    red_cooldown_end_t = 0.0             # Rot-Sperre aktiv bis dieser Zeitpunkt (0 = keine)
 
     frame_count    = 0
     fps_t          = time.time()
@@ -294,11 +295,10 @@ def main():
 
             # Rote Markierung prüfen – nur während Fahr-Zuständen relevant.
             # detect_red() ist günstig (nutzt den bereits berechneten ROI).
-            red_detected = False
-            if state in (State.FOLLOWING, State.RETURNING):
+            red_detected  = False
+            red_on_cooldown = now < red_cooldown_end_t
+            if state in (State.FOLLOWING, State.RETURNING) and not red_on_cooldown:
                 red_detected, red_area_last = detector.detect_red(frame)
-                # Jeden 30. Frame Rohwert loggen – hilft beim Kalibrieren der Schwelle.
-                # "red_area=3200" aber kein Auslösen → Schwelle (MIN_RED_AREA=10000) passt.
                 if frame_count % 30 == 0 and red_area_last > 0:
                     logger.debug("rot_px=%d  (Schwelle=%d)", red_area_last, 10_000)
 
@@ -308,6 +308,12 @@ def main():
                 cv2.rectangle(debug_frame, (0, 0), (w_f, 30), (0, 0, 180), -1)
                 cv2.putText(debug_frame, f"ROT erkannt  ({red_area_last} px)",
                             (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+            elif red_on_cooldown:
+                remaining_cd = red_cooldown_end_t - now
+                h_f, w_f = debug_frame.shape[:2]
+                cv2.rectangle(debug_frame, (0, 0), (w_f, 30), (40, 40, 120), -1)
+                cv2.putText(debug_frame, f"ROT gesperrt  noch {remaining_cd:.0f}s",
+                            (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (180, 180, 255), 2)
 
             # ── Zustandsmaschine ──────────────────────────────────────────────
             hud_extra = ""
@@ -344,11 +350,17 @@ def main():
                 if rotated >= 175.0:   # 175° reicht – Kalibriertoleranz
                     rover.stop()
                     heading.reset()
-                    follow_state  = State.RETURNING   # Rückfahrt-Modus einschalten
-                    state         = State.RETURNING
-                    last_seen_side = SEARCH_DIRECTION  # Suchrichtung zurücksetzen
-                    prev_error    = 0.0
-                    logger.info("↩  180° abgeschlossen – Rückfahrt beginnt")
+                    follow_state       = State.RETURNING
+                    state              = State.RETURNING
+                    last_seen_side     = SEARCH_DIRECTION
+                    prev_error         = 0.0
+                    # Rot-Sperre starten: Rover fährt gerade erst über die
+                    # erste Markierung weg → für RED_COOLDOWN_S keine Auslösung.
+                    red_cooldown_end_t = now + RED_COOLDOWN_S
+                    logger.info(
+                        "Rückfahrt beginnt – Rot gesperrt für %.0fs",
+                        RED_COOLDOWN_S
+                    )
                 else:
                     rover.turn_in_place(TURN_180_SPD, direction="left")
 

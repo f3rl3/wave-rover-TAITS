@@ -49,8 +49,15 @@ SPEED_TURN_MAX  = 0.10             # Maximale Differenz links/rechts beim Lenken
 SPEED_SEARCH    = 0.15             # Geschwindigkeit beim Suchen (Rotation)
 
 # ── Lenkung ──────────────────────────────────────────────────────────────────
-# Toter Bereich um die Mitte – in diesem Bereich fährt der Rover gerade
-DEAD_ZONE_RATIO = 0.10              # 10% der Framebreite links/rechts = "gerade"
+# Toter Bereich um die Mitte – in diesem Bereich fährt der Rover geradeaus.
+#
+# Ziel: Pfad stets im MITTLEREN DRITTEL des Bildes halten.
+#   Mittleres Drittel = Bereich x ∈ [W/3 … 2W/3] um die Bildmitte.
+#   Abstand zur Mitte: W/6 = Frame_Width × (1/6) ≈ 0.167
+#
+#   DEAD_ZONE_RATIO = 0.167  → Rover fährt gerade wenn Pfad im mittleren Drittel
+#   DEAD_ZONE_RATIO = 0.10   → ältere engere Einstellung (nur zentrales Fünftel)
+DEAD_ZONE_RATIO = 0.167             # mittleres Drittel = ±1/6 der Framebreite
 
 # PD-Regler Koeffizienten (P = Proportional, D = Differenzial)
 # offset_normalized ist -1.0…+1.0, daher müssen KP/KD in dieser Größenordnung sein.
@@ -96,10 +103,23 @@ SEARCH_DIRECTION   = "left"        # "left" oder "right" – erste Suchrichtung
 # Der Rover hält auf der ersten roten Fläche an und wartet auf ein Signal.
 # Dann dreht er 180° und fährt zurück. Auf der zweiten roten Fläche terminiert er.
 #
-# RED_STOP_WAIT_S: Dummy-Wartezeit in Sekunden (später: echtes Signal-Modul).
-# TURN_180_SPD:    Rotationsgeschwindigkeit beim 180°-Drehen (0.0–1.0).
-RED_STOP_WAIT_S  = 10.0              # Sekunden bis "Signal" empfangen (Dummy)
-TURN_180_SPD     = 0.20              # Rotationsgeschwindigkeit für 180°-Drehung
+# RED_STOP_WAIT_S:      Dummy-Wartezeit in Sekunden (später: echtes Signal-Modul).
+# TURN_180_SPD:         Rotationsgeschwindigkeit beim 180°-Drehen (0.0–1.0).
+#
+# RED_DETECT_Y_START:   Rot wird nur erkannt wenn es im UNTEREN Teil des Frames ist.
+#                       Wert ist ein Anteil der Frame-Höhe (0.0 = ganz oben, 1.0 = unten).
+#                       0.55 → roter Bereich muss ab 55 % Frame-Höhe sichtbar sein.
+#                       Kamera zeigt nach unten: y > 55 % ≈ direkt unter / hinter Rover.
+#                       Damit hält der Rover erst wenn er AUF der Markierung steht,
+#                       nicht schon wenn er sie von weitem sieht.
+#
+# RED_COOLDOWN_S:       Sperre nach dem Wiederanfahren – Rot wird für diese Dauer
+#                       NICHT erkannt. Verhindert sofortige Re-Auslösung während
+#                       der Rover noch über die erste Markierung hinwegfährt.
+RED_STOP_WAIT_S    = 10.0            # Sekunden bis "Signal" empfangen (Dummy)
+TURN_180_SPD       = 0.20            # Rotationsgeschwindigkeit für 180°-Drehung
+RED_DETECT_Y_START = 0.55            # Rot nur im unteren Teil (≥ 55 % Frame-Höhe)
+RED_COOLDOWN_S     = 15.0            # Sekunden Rot-Sperre nach dem Wiederanfahren
 
 # ── Debug / Visualisierung ───────────────────────────────────────────────────
 DEBUG_WINDOW      = False          # OpenCV-Fenster (nur mit Monitor am Pi sinnvoll)
