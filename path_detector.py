@@ -43,7 +43,7 @@ from config import (
     MIN_GREEN_AREA,
     ROI_TOP_RATIO, ROI_BOTTOM_RATIO,
     DEAD_ZONE_RATIO,
-    FRAME_WIDTH, FRAME_HEIGHT,
+    FRAME_WIDTH,
     BEND_SLOW_DEG, BEND_STOP_DEG, SPEED_MIN_FACTOR,
     RED_DETECT_Y_START,
 )
@@ -152,10 +152,10 @@ class PathDetector:
         result = self._calc_offset(mask, w, roi_h)
 
         if result.found:
-            self._calc_bend(mask, result, w, roi_h)
+            self._calc_bend(mask, result, roi_h)
             result.stripe_angle_deg = self._calc_stripe_angle(mask)
 
-        debug = self._draw_overlay(frame.copy(), mask, result, w, h, roi_h)
+        debug = self._draw_overlay(frame.copy(), mask, result, w, roi_h)
         return result, debug
 
     def get_last_mask(self) -> Optional[np.ndarray]:
@@ -226,7 +226,8 @@ class PathDetector:
             return 0.0
 
         pts = np.column_stack([xs, ys]).astype(np.float32).reshape(-1, 1, 2)
-        output = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01)
+        # fitLine gibt je nach OpenCV-Version (4,) oder (4,1) zurück → flatten()
+        output = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
         vx, vy = float(output[0]), float(output[1])
 
         # fitLine liefert keine eindeutige Richtung – normalisieren:
@@ -295,7 +296,7 @@ class PathDetector:
         )
 
     def _calc_bend(self, mask: np.ndarray, result: PathResult,
-                   frame_w: int, roi_h: int):
+                   roi_h: int):
         """
         Vergleicht FERN-Zone (voraus) mit NAH-Zone (unter Rover) → Knickwinkel.
 
@@ -357,7 +358,7 @@ class PathDetector:
     # ── Debug-Overlay ──────────────────────────────────────────────────────────
 
     def _draw_overlay(self, frame: np.ndarray, mask: np.ndarray,
-                      result: PathResult, w: int, h: int, roi_h: int) -> np.ndarray:
+                      result: PathResult, w: int, roi_h: int) -> np.ndarray:
         """Zeichnet alle Debug-Overlays (angepasst für nach-unten-Kamera)."""
 
         rt = self._roi_y_top
