@@ -49,6 +49,15 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
+# ── Rot-Erkennung ─────────────────────────────────────────────────────────────
+# Rot liegt im HSV-Farbraum an beiden Rändern (H ≈ 0–10 und H ≈ 165–180),
+# deshalb werden zwei Masken per bitwise_or kombiniert.
+_RED_LOW1  = np.array((  0, 100,  80), dtype=np.uint8)   # unteres Rot
+_RED_HIGH1 = np.array(( 10, 255, 255), dtype=np.uint8)
+_RED_LOW2  = np.array((165, 100,  80), dtype=np.uint8)   # oberes Rot
+_RED_HIGH2 = np.array((180, 255, 255), dtype=np.uint8)
+MIN_RED_AREA = 4000   # Mindestfläche roter Pixel (Rauschfilter)
+
 # ── Zonen-Konstanten (relativ zur ROI-Höhe) ───────────────────────────────────
 # FERN-Zone: oberste 20% des ROI = Pfad knapp vor dem Rover
 FAR_ZONE_END     = 0.20
@@ -130,6 +139,34 @@ class PathDetector:
     def get_last_mask(self) -> Optional[np.ndarray]:
         """Gibt die Maske des zuletzt verarbeiteten Frames zurück – ohne Neuberechnung."""
         return self._last_mask
+
+    def detect_red(self, frame: np.ndarray) -> Tuple[bool, int]:
+        """
+        Erkennt eine rote Stopp-Markierung im Frame (Kamera nach unten).
+
+        Rot liegt im HSV-Farbraum an beiden Enden der Hue-Achse (0–10° und
+        165–180°), daher werden zwei Masken kombiniert.  Gesucht wird nur im
+        ROI-Bereich (gleiche Region wie Grün-Erkennung), damit Objekte außerhalb
+        des Fahrbereichs ignoriert werden.
+
+        Returns:
+            (detected, area)
+            detected – True wenn rote Fläche ≥ MIN_RED_AREA
+            area     – Anzahl roter Pixel (für Debug-Ausgaben)
+        """
+        h, w = frame.shape[:2]
+        self._update_roi(h, w)
+
+        roi = frame[self._roi_y_top:self._roi_y_bottom, :]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        mask1 = cv2.inRange(hsv, _RED_LOW1, _RED_HIGH1)
+        mask2 = cv2.inRange(hsv, _RED_LOW2, _RED_HIGH2)
+        mask  = cv2.bitwise_or(mask1, mask2)
+        mask  = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self._kernel)
+
+        area = int(cv2.countNonZero(mask))
+        return area >= MIN_RED_AREA, area
 
     def update_hsv_range(self, low: tuple, high: tuple):
         self._lower = np.array(low,  dtype=np.uint8)

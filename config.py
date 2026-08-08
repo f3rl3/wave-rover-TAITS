@@ -92,6 +92,15 @@ SEARCH_TIMEOUT_S   = 5.0           # Nach X Sekunden ohne Pfad: Suche starten
 SEARCH_ROTATION    = 0.3           # Rotationsgeschwindigkeit beim Suchen
 SEARCH_DIRECTION   = "left"        # "left" oder "right" – erste Suchrichtung
 
+# ── Rote Stop-Markierung ─────────────────────────────────────────────────────
+# Der Rover hält auf der ersten roten Fläche an und wartet auf ein Signal.
+# Dann dreht er 180° und fährt zurück. Auf der zweiten roten Fläche terminiert er.
+#
+# RED_STOP_WAIT_S: Dummy-Wartezeit in Sekunden (später: echtes Signal-Modul).
+# TURN_180_SPD:    Rotationsgeschwindigkeit beim 180°-Drehen (0.0–1.0).
+RED_STOP_WAIT_S  = 10.0              # Sekunden bis "Signal" empfangen (Dummy)
+TURN_180_SPD     = 0.20              # Rotationsgeschwindigkeit für 180°-Drehung
+
 # ── Debug / Visualisierung ───────────────────────────────────────────────────
 DEBUG_WINDOW      = False          # OpenCV-Fenster (nur mit Monitor am Pi sinnvoll)
 DEBUG_SHOW_MASK   = False          # Grün-Maske als zweites OpenCV-Fenster

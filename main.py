@@ -1,6 +1,6 @@
 """
-Wave Rover – Grüner-Pfad-Folger
-=================================
+Wave Rover – Grüner-Pfad-Folger mit Stopp-Markierung
+======================================================
 Hauptprogramm: Verbindet Kamera, Pfaderkennung und Rover-Steuerung.
 
 Zustandsmaschine:
@@ -8,12 +8,20 @@ Zustandsmaschine:
          ┌──────────────────────────────────────┐
          │                                      ▼
       [PAUSED] ──P──► [FOLLOWING] ──Knick≥STOP──► [ALIGNING]
-                           │                         │
-                           │  Pfad verloren          │ ausgerichtet
-                           ▼                         │
-                      [SEARCHING] ◄──────────────────┘
-                           │  Pfad gefunden
-                           └──────────────────────────────► [FOLLOWING]
+                           │    │                    │
+                      rot  │    │ Pfad verloren       │ ausgerichtet
+                           ▼    ▼                    │
+                      [RED_STOP] [SEARCHING] ◄───────┘
+                           │         │  Pfad gefunden
+                        10s│         └──────────► [FOLLOWING]
+                           ▼
+                     [TURNING_180] ──180°──► [RETURNING] ──Knick──► [ALIGNING]
+                                                  │    │                 │
+                                             rot  │    │ Pfad verloren   │ ausgerichtet
+                                                  ▼    ▼                │
+                                           [TERMINAL] [SEARCHING] ◄─────┘
+                                                            │  Pfad gefunden
+                                                            └──────────► [RETURNING]
 
 Tastenkürzel im Debug-Fenster:
     Q / ESC → Beenden
@@ -37,6 +45,7 @@ from config import (
     BEND_STOP_DEG, BEND_ALIGN_DEG,
     ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
+    RED_STOP_WAIT_S, TURN_180_SPD,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
     DEBUG_WEB_SERVER, DEBUG_SERVER_PORT, DEBUG_STREAM_FPS,
 )
@@ -54,10 +63,15 @@ logger = logging.getLogger("main")
 
 # ── Zustände ─────────────────────────────────────────────────────────────────
 class State:
-    FOLLOWING = "FOLLOWING"   # Pfad folgen
-    ALIGNING  = "ALIGNING"    # Stopp + Ausrichten bei scharfem Knick
-    SEARCHING = "SEARCHING"   # Pfad verloren, suchen
-    PAUSED    = "PAUSED"      # Manuell pausiert
+    FOLLOWING   = "FOLLOWING"    # Pfad folgen (Hinfahrt)
+    ALIGNING    = "ALIGNING"     # Stopp + Ausrichten bei scharfem Knick
+    SEARCHING   = "SEARCHING"    # Pfad verloren, suchen
+    PAUSED      = "PAUSED"       # Manuell pausiert
+    # ── Rote-Markierung-Sequenz ───────────────────────────────────────────────
+    RED_STOP    = "RED_STOP"     # 1. rote Markierung – steht, wartet auf Signal
+    TURNING_180 = "TURNING_180"  # Dreht 180°, um zurückzufahren
+    RETURNING   = "RETURNING"    # Pfad folgen (Rückfahrt)
+    TERMINAL    = "TERMINAL"     # 2. rote Markierung – Programm beendet sich
 
 
 # ── Heading-Tracker ───────────────────────────────────────────────────────────
@@ -135,10 +149,14 @@ def open_camera() -> cv2.VideoCapture:
 
 
 STATE_COLORS = {
-    State.FOLLOWING: (0, 220, 0),
-    State.ALIGNING:  (0, 100, 255),
-    State.SEARCHING: (0, 165, 255),
-    State.PAUSED:    (0, 0, 220),
+    State.FOLLOWING:   (0,   220,   0),
+    State.ALIGNING:    (0,   100, 255),
+    State.SEARCHING:   (0,   165, 255),
+    State.PAUSED:      (0,     0, 220),
+    State.RED_STOP:    (0,     0, 200),
+    State.TURNING_180: (0,   200, 200),
+    State.RETURNING:   (180, 220,   0),
+    State.TERMINAL:    (60,   60,  60),
 }
 
 def draw_hud(frame, state: str, speed: float, extra: str = ""):
@@ -241,12 +259,18 @@ def main():
     search_dir_t   = time.time()    # Zeitpunkt: aktuelle Suchrichtung begonnen
 
     # Auf welcher Seite des Sichtfeldes der Pfad zuletzt gesehen wurde.
-    # Wird bei jedem Frame aktualisiert solange der Pfad sichtbar ist.
-    # Beim Pfadverlust wird diese Seite als erste Suchrichtung verwendet,
-    # weil der Pfad wahrscheinlich in diese Richtung weitergeht.
     last_seen_side = SEARCH_DIRECTION  # Fallback: konfigurierter Standardwert
 
     heading        = HeadingTracker(ROTATE_DEG_PER_SEC)
+
+    # ── Rote-Markierung-Sequenz ───────────────────────────────────────────────
+    # follow_state: gibt an, zu welchem Fahr-Zustand ALIGNING/SEARCHING zurückspringen.
+    #   → FOLLOWING  während der Hinfahrt
+    #   → RETURNING  während der Rückfahrt
+    # So folgen Ausrichtung und Suche automatisch dem richtigen Modus.
+    follow_state   = State.FOLLOWING  # aktueller Fahr-Modus (ändert sich bei Rückfahrt)
+    red_stop_t     = 0.0              # Zeitpunkt: erste rote Markierung gesehen
+    red_area_last  = 0                # Größe der zuletzt erkannten roten Fläche (Debug)
 
     frame_count    = 0
     fps_t          = time.time()
@@ -267,10 +291,63 @@ def main():
             # ── Pfaderkennung ─────────────────────────────────────────────────
             result, debug_frame = detector.process(frame)
 
+            # Rote Markierung prüfen – nur während Fahr-Zuständen relevant.
+            # detect_red() ist günstig (nutzt den bereits berechneten ROI).
+            red_detected = False
+            if state in (State.FOLLOWING, State.RETURNING):
+                red_detected, red_area_last = detector.detect_red(frame)
+
+            # Rote-Markierung-Overlay auf Debug-Frame zeichnen
+            if red_detected or (state in (State.RED_STOP, State.TURNING_180, State.TERMINAL)):
+                h_f, w_f = debug_frame.shape[:2]
+                cv2.rectangle(debug_frame, (0, 0), (w_f, 30), (0, 0, 180), -1)
+                cv2.putText(debug_frame, f"ROT erkannt  ({red_area_last} px)",
+                            (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+
             # ── Zustandsmaschine ──────────────────────────────────────────────
             hud_extra = ""
 
-            if state == State.PAUSED:
+            if state == State.TERMINAL:
+                # ── TERMINAL: Zweite rote Markierung – sofort beenden ─────────
+                rover.stop()
+                logger.info("🏁 TERMINAL – zweite rote Markierung. Programm beendet.")
+                break
+
+            elif state == State.RED_STOP:
+                # ── RED_STOP: Erste rote Markierung – stehe, warte auf Signal ─
+                rover.stop()
+                elapsed = now - red_stop_t
+                remaining = max(0.0, RED_STOP_WAIT_S - elapsed)
+                hud_extra = f"warte auf Signal… {remaining:.1f}s"
+                logger.debug("RED_STOP  verbleibend=%.1fs", remaining)
+
+                if elapsed >= RED_STOP_WAIT_S:
+                    logger.info(
+                        "📡 Signal empfangen (Dummy nach %.0fs) – starte 180°-Drehung",
+                        RED_STOP_WAIT_S
+                    )
+                    state = State.TURNING_180
+                    heading.reset()
+
+            elif state == State.TURNING_180:
+                # ── TURNING_180: 180° drehen, dann Rückfahrt ──────────────────
+                # Immer nach links drehen (konsistente Richtung).
+                heading.update("left", now)
+                rotated = heading.abs_deg
+                hud_extra = f"dreht 180°  {rotated:.0f}°/180°"
+
+                if rotated >= 175.0:   # 175° reicht – Kalibriertoleranz
+                    rover.stop()
+                    heading.reset()
+                    follow_state  = State.RETURNING   # Rückfahrt-Modus einschalten
+                    state         = State.RETURNING
+                    last_seen_side = SEARCH_DIRECTION  # Suchrichtung zurücksetzen
+                    prev_error    = 0.0
+                    logger.info("↩  180° abgeschlossen – Rückfahrt beginnt")
+                else:
+                    rover.turn_in_place(TURN_180_SPD, direction="left")
+
+            elif state == State.PAUSED:
                 rover.stop()
                 hud_extra = "P drücken zum Fortfahren"
 
@@ -304,7 +381,7 @@ def main():
                         rotated_deg, MAX_ALIGN_ROTATION_DEG
                     )
                     heading.reset()
-                    state      = State.FOLLOWING
+                    state      = follow_state   # FOLLOWING oder RETURNING
                     prev_error = 0.0
                     rover.stop()
 
@@ -314,7 +391,7 @@ def main():
                         result.bend_angle_deg, rotated_deg
                     )
                     heading.reset()
-                    state      = State.FOLLOWING
+                    state      = follow_state   # FOLLOWING oder RETURNING
                     prev_error = 0.0
 
                 elif elapsed > ALIGN_TIMEOUT_S:
@@ -323,7 +400,7 @@ def main():
                         elapsed, rotated_deg
                     )
                     heading.reset()
-                    state = State.FOLLOWING
+                    state = follow_state        # FOLLOWING oder RETURNING
 
                 else:
                     rover.turn_in_place(ALIGN_ROTATE_SPD, direction=align_dir)
@@ -354,7 +431,7 @@ def main():
                         rotated_deg
                     )
                     heading.reset()
-                    state       = State.FOLLOWING
+                    state       = follow_state  # FOLLOWING oder RETURNING
                     last_seen_t = now
                     prev_error  = 0.0
 
@@ -377,8 +454,29 @@ def main():
                         f"{rotated_deg:.0f}°/{MAX_SEARCH_ROTATION_DEG:.0f}°"
                     )
 
-            else:
-                # ── FOLLOWING: Pfad gefunden → folgen ────────────────────────
+            elif state in (State.FOLLOWING, State.RETURNING):
+                # ── FOLLOWING / RETURNING: Pfad folgen ───────────────────────
+                #
+                # Rote Markierung auslösen:
+                #   FOLLOWING  → erste rote Markierung  → RED_STOP
+                #   RETURNING  → zweite rote Markierung → TERMINAL
+                if red_detected:
+                    rover.stop()
+                    if state == State.FOLLOWING:
+                        logger.info(
+                            "🔴 Erste rote Markierung erkannt (%d px) – warte auf Signal",
+                            red_area_last
+                        )
+                        state      = State.RED_STOP
+                        red_stop_t = now
+                    else:   # RETURNING
+                        logger.info(
+                            "🔴 Zweite rote Markierung erkannt (%d px) – terminiere",
+                            red_area_last
+                        )
+                        state = State.TERMINAL
+                    continue   # Rest des Loops überspringen, nächster Frame
+
                 if not result.found:
                     lost = now - last_seen_t
                     if lost < SEARCH_TIMEOUT_S * 0.3:
@@ -389,9 +487,9 @@ def main():
                             lost, last_seen_side
                         )
                         state        = State.SEARCHING
-                        search_dir   = last_seen_side      # zur zuletzt gesehenen Seite drehen
+                        search_dir   = last_seen_side
                         search_dir_t = now
-                        heading.reset()                    # Von hier aus maximal 150° suchen
+                        heading.reset()
                         rover.stop()
                 else:
                     last_seen_t = now
@@ -466,6 +564,9 @@ def main():
                         "heading_deg":    round(heading.abs_deg, 1),
                         "heading_limit":  MAX_ALIGN_ROTATION_DEG,
                         "last_seen_side": last_seen_side,
+                        "red_detected":   red_detected,
+                        "red_area":       red_area_last,
+                        "follow_mode":    follow_state,
                         "fps":            round(fps_display, 1),
                         "frame_count":    frame_count,
                     }
