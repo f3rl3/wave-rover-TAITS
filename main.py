@@ -46,6 +46,7 @@ from config import (
     ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
     RED_STOP_WAIT_S, TURN_180_SPD, RED_COOLDOWN_S,
+    STRIPE_ALIGN_KP, STRIPE_ALIGN_TOL_DEG,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
     DEBUG_WEB_SERVER, DEBUG_SERVER_PORT, DEBUG_STREAM_FPS,
 )
@@ -532,11 +533,42 @@ def main():
                     else:
                         # Geschwindigkeit anpassen: langsamer bei Kurve
                         current_speed = base_speed * result.speed_factor
-                        prev_error    = result.offset_normalized
+                        stripe_angle  = result.stripe_angle_deg
+
+                        # ── Zwei-Phasen-Lenkung ───────────────────────────────
+                        # Phase 1 – Streifen außerhalb Mitte (not in_dead_zone):
+                        #   Nur lateral korrigieren. Rover fährt auf den Streifen zu.
+                        #   Winkelkorrektur ist DEAKTIVIERT – sonst dreht Rover schon
+                        #   parallel und prüft endlos ob er noch parallel ist.
+                        #
+                        # Phase 2 – Streifen in der Mitte (in_dead_zone):
+                        #   Lateraler Fehler ≈ 0. Jetzt Winkelkorrektur anwenden damit
+                        #   Streifen senkrecht zum Bildrand steht. Rover dreht leicht
+                        #   während er vorwärts fährt – kein Stopp nötig.
 
                         if result.in_dead_zone:
-                            rover.forward(current_speed)
+                            # Phase 2: Streifen zentriert – Winkel korrigieren
+                            angular_err = 0.0
+                            if abs(stripe_angle) > STRIPE_ALIGN_TOL_DEG:
+                                # Normiert auf -1..+1, skaliert mit eigenem Gain.
+                                # Division durch KP damit steer() (×KP) den richtigen
+                                # Endwert STRIPE_ALIGN_KP liefert.
+                                angular_err = (stripe_angle / 90.0) * (STRIPE_ALIGN_KP / KP)
+
+                            if abs(stripe_angle) <= STRIPE_ALIGN_TOL_DEG:
+                                rover.forward(current_speed)   # zentriert + ausgerichtet
+                                hud_extra = ""
+                            else:
+                                rover.steer(
+                                    current_speed,
+                                    angular_err,               # nur Winkel, kein Offset
+                                    turn_max=SPEED_TURN_MAX,
+                                    kp=KP, kd=KD,
+                                    prev_error=0.0,
+                                )
+                                hud_extra = f"Ausrichten {stripe_angle:+.0f}°"
                         else:
+                            # Phase 1: Streifen seitlich – nur lateral, kein Winkel
                             rover.steer(
                                 current_speed,
                                 result.offset_normalized,
@@ -544,15 +576,19 @@ def main():
                                 kp=KP, kd=KD,
                                 prev_error=prev_error,
                             )
+                            hud_extra = f"Annähern  off={result.offset_normalized:+.2f}"
 
-                        if result.speed_factor < 1.0:
-                            hud_extra = f"Kurve {result.bend_angle_deg:.0f}° → speed x{result.speed_factor:.2f}"
+                        prev_error = result.offset_normalized
+
+                        if result.speed_factor < 1.0 and not result.in_dead_zone:
+                            hud_extra = f"Kurve {result.bend_angle_deg:.0f}°  off={result.offset_normalized:+.2f}"
 
                         if DEBUG_PRINT_SPEED:
                             logger.debug(
-                                "FOLLOW  off=%+.3f  winkel=%.1f°  sf=%.2f  spd=%.2f",
-                                result.offset_normalized, result.bend_angle_deg,
-                                result.speed_factor, current_speed
+                                "FOLLOW  off=%+.3f  stripe=%+.1f°  phase=%s  sf=%.2f",
+                                result.offset_normalized, stripe_angle,
+                                "ALIGN" if result.in_dead_zone else "APPROACH",
+                                result.speed_factor,
                             )
 
             # ── FPS ───────────────────────────────────────────────────────────

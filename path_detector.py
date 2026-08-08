@@ -104,6 +104,14 @@ class PathResult:
     is_sharp_bend: bool = False
     speed_factor: float = 1.0        # 1.0 = volle Geschw., 0.0 = Stopp/Ausrichten
 
+    # ── Streifen-Ausrichtungswinkel (fitLine) ─────────────────────────────────
+    # Winkel zwischen erkanntem Streifen und der Vertikalen (Fahrtrichtung).
+    #   0°  = Streifen senkrecht im Bild  → Rover korrekt ausgerichtet
+    #  +x°  = Streifen nach rechts geneigt → Rover muss rechts drehen
+    #  −x°  = Streifen nach links geneigt  → Rover muss links drehen
+    # Wird nur ausgewertet wenn Streifen lateral bereits in der Mitte ist.
+    stripe_angle_deg: float = 0.0
+
 
 class PathDetector:
     """Erkennt grünen Pfad bei nach-unten-gerichteter Kamera."""
@@ -145,6 +153,7 @@ class PathDetector:
 
         if result.found:
             self._calc_bend(mask, result, w, roi_h)
+            result.stripe_angle_deg = self._calc_stripe_angle(mask)
 
         debug = self._draw_overlay(frame.copy(), mask, result, w, h, roi_h)
         return result, debug
@@ -198,6 +207,33 @@ class PathDetector:
         self._upper = np.array(high, dtype=np.uint8)
 
     # ── Interne Berechnungen ───────────────────────────────────────────────────
+
+    def _calc_stripe_angle(self, mask: np.ndarray) -> float:
+        """
+        Berechnet den Winkel des Streifens zur Vertikalen via cv2.fitLine().
+
+          0°  → Streifen senkrecht (Rover ausgerichtet)
+         +x°  → Streifen nach rechts geneigt  → Rover dreht rechts
+         −x°  → Streifen nach links geneigt   → Rover dreht links
+
+        Vorzeichen-Konvention identisch zu offset_normalized:
+          positive Werte = Korrektur nach rechts nötig.
+        """
+        ys, xs = np.where(mask > 0)
+        if len(xs) < 30:
+            return 0.0
+
+        pts = np.column_stack([xs, ys]).astype(np.float32).reshape(-1, 1, 2)
+        # .flatten(): fitLine gibt je nach OpenCV-Version (4,) oder (4,1) zurück
+        out = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
+        vx, vy = float(out[0]), float(out[1])
+
+        # Richtungsvektor soll nach "oben" im Bild zeigen (= Pfad voraus, vy < 0)
+        if vy > 0:
+            vx, vy = -vx, -vy
+
+        # Winkel zur Vertikalen: 0° = senkrecht, +90° = waagrecht nach rechts
+        return math.degrees(math.atan2(vx, -vy))
 
     def _update_roi(self, h: int, w: int):
         new_top    = int(h * ROI_TOP_RATIO)
@@ -401,6 +437,27 @@ class PathDetector:
 
             cv2.putText(frame, btxt, (10, 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.62, bcol, 2)
+
+            # ── Streifen-Ausrichtungslinie ─────────────────────────────────────
+            # Zeigt die per fitLine berechnete Orientierung des Streifens.
+            # Cyan  = ausgerichtet (Winkelkorrektur inaktiv – Streifen zu weit weg)
+            # Gelb  = Streifen mittig, Winkel wird korrigiert
+            angle     = result.stripe_angle_deg
+            angle_rad = math.radians(angle)
+            lx = math.sin(angle_rad)
+            ly = -math.cos(angle_rad)
+            cx_l = result.centroid_x if result.centroid_x is not None else w // 2
+            cy_l = (rt + rb) // 2
+            arm  = (rb - rt) // 2 - 5
+            cv2.line(frame,
+                     (int(cx_l - lx * arm), int(cy_l - ly * arm)),
+                     (int(cx_l + lx * arm), int(cy_l + ly * arm)),
+                     (0, 220, 220) if result.in_dead_zone else (80, 80, 200),
+                     2, cv2.LINE_AA)
+            cv2.putText(frame, f"{angle:+.0f}deg",
+                        (cx_l + 6, cy_l - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                        (0, 220, 220) if result.in_dead_zone else (80, 80, 200), 1)
         else:
             cv2.putText(frame, "PFAD NICHT GEFUNDEN",
                         (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)

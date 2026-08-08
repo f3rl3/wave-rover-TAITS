@@ -64,6 +64,18 @@ DEAD_ZONE_RATIO = 0.167             # mittleres Drittel = ±1/6 der Framebreite
 KP = 0.55                          # Proportionaler Anteil  (war 0.0025 → viel zu klein!)
 KD = 0.10                          # Differenzialer Anteil (dämpft Überschwingen)
 
+# ── Streifen-Ausrichtung (Winkelkorrektur) ────────────────────────────────────
+# Zwei-Phasen-Lenkung:
+#   Phase 1 – Streifen außerhalb Mitte: nur lateral korrigieren (auf Streifen zufahren).
+#   Phase 2 – Streifen in der Mitte (in_dead_zone): Winkelkorrektur aktiv werden lassen.
+#
+# STRIPE_ALIGN_KP:      Verstärkung der Winkelkorrektur (unabhängig von KP).
+#                       Kleiner = sanfter, größer = aggressiver. Startwert: 0.30
+# STRIPE_ALIGN_TOL_DEG: Toleranz – unter diesem Winkel keine Korrektur.
+#                       12° = „senkrecht genug". Kleiner → Rover zittert.
+STRIPE_ALIGN_KP      = 0.30
+STRIPE_ALIGN_TOL_DEG = 12.0
+
 # ── Knick-Erkennung & Geschwindigkeitsanpassung ──────────────────────────────
 # Der Knickwinkel wird aus dem Unterschied zwischen dem nahen und fernen
 # Pfad-Schwerpunkt im ROI berechnet (in Grad).
