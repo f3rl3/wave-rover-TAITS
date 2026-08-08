@@ -1,33 +1,6 @@
 """
-Wave Rover – Grüner-Pfad-Folger mit Stopp-Markierung
-======================================================
-Hauptprogramm: Verbindet Kamera, Pfaderkennung und Rover-Steuerung.
-
-Zustandsmaschine:
-                    Pfad gefunden
-         ┌──────────────────────────────────────┐
-         │                                      ▼
-      [PAUSED] ──P──► [FOLLOWING] ──Knick≥STOP──► [ALIGNING]
-                           │    │                    │
-                      rot  │    │ Pfad verloren       │ ausgerichtet
-                           ▼    ▼                    │
-                      [RED_STOP] [SEARCHING] ◄───────┘
-                           │         │  Pfad gefunden
-                        10s│         └──────────► [FOLLOWING]
-                           ▼
-                     [TURNING_180] ──180°──► [RETURNING] ──Knick──► [ALIGNING]
-                                                  │    │                 │
-                                             rot  │    │ Pfad verloren   │ ausgerichtet
-                                                  ▼    ▼                │
-                                           [TERMINAL] [SEARCHING] ◄─────┘
-                                                            │  Pfad gefunden
-                                                            └──────────► [RETURNING]
-
-Tastenkürzel im Debug-Fenster:
-    Q / ESC → Beenden
-    P       → Pause (Rover stoppt, Bild läuft weiter)
-    M       → Grün-Maske ein-/ausblenden
-    +/-     → Grundgeschwindigkeit erhöhen/verringern
+Wave Rover Path-Follower
+Hauptprogramm: Verbindet Kamera, Pfaderkennung und Rover-Steuerung
 """
 
 import argparse
@@ -42,8 +15,6 @@ from config import (
     SPEED_FORWARD, SPEED_TURN_MAX,
     SEARCH_TIMEOUT_S, SEARCH_ROTATION, SEARCH_DIRECTION,
     KP, KD,
-    BEND_STOP_DEG, BEND_ALIGN_DEG,
-    ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
     RED_STOP_WAIT_S, TURN_180_SPD, RED_COOLDOWN_S,
     STRIPE_ALIGN_TOL_DEG, STRIPE_ALIGN_EXIT_DEG, STRIPE_ALIGN_TIMEOUT_S,
@@ -63,36 +34,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-
-# ── Zustände ─────────────────────────────────────────────────────────────────
 class State:
-    FOLLOWING   = "FOLLOWING"    # Pfad folgen (Hinfahrt)
-    ALIGNING    = "ALIGNING"     # Stopp + Ausrichten bei scharfem Knick
-    SEARCHING   = "SEARCHING"    # Pfad verloren, suchen
-    PAUSED      = "PAUSED"       # Manuell pausiert
-    # ── Rote-Markierung-Sequenz ───────────────────────────────────────────────
-    RED_STOP    = "RED_STOP"     # 1. rote Markierung – steht, wartet auf Signal
-    TURNING_180 = "TURNING_180"  # Dreht 180°, um zurückzufahren
-    RETURNING   = "RETURNING"    # Pfad folgen (Rückfahrt)
-    TERMINAL    = "TERMINAL"     # 2. rote Markierung – Programm beendet sich
+    FOLLOWING   = "FOLLOWING"
+    ALIGNING    = "ALIGNING"
+    SEARCHING   = "SEARCHING"
+    # PAUSED      = "PAUSED"       # Manuell pausiert
+    RED_STOP    = "RED_STOP"
+    TURNING_180 = "TURNING_180"
+    RETURNING   = "RETURNING"
+    TERMINAL    = "TERMINAL"
 
-
-# ── Heading-Tracker ───────────────────────────────────────────────────────────
 class HeadingTracker:
     """
     Schätzt die kumulierte Rotation des Rovers seit dem letzten reset().
-
-    Da der Rover keinen Kompass hat, wird die Rotation über
-        gedrehte_Grad = Zeit × ROTATE_DEG_PER_SEC
-    approximiert. Mit dieser Information wird verhindert, dass der Rover
-    durch Überrotation rückwärts fährt:
-
-        ALIGNING : nie mehr als MAX_ALIGN_ROTATION_DEG (< 90°) drehen
-        SEARCHING: pro Richtung nie mehr als MAX_SEARCH_ROTATION_DEG (< 180°)
-
-    Kalibrierung (ROTATE_DEG_PER_SEC in config.py):
-        Rover 5 Sekunden mit turn_in_place drehen lassen,
-        gemessene Grad durch 5 teilen.
     """
 
     def __init__(self, deg_per_sec: float):
@@ -101,15 +55,10 @@ class HeadingTracker:
         self._last_t: Optional[float] = None
 
     def reset(self):
-        """Setzt Zähler zurück – markiert aktuelle Richtung als 'vorwärts'."""
         self._accum  = 0.0
         self._last_t = None
 
     def update(self, direction: str, now: float):
-        """
-        Jeden Frame aufrufen solange der Rover dreht.
-        direction: 'left' oder 'right'
-        """
         if self._last_t is None:
             self._last_t = now
             return
@@ -120,23 +69,15 @@ class HeadingTracker:
 
     @property
     def abs_deg(self) -> float:
-        """Absoluter Betrag der Gesamtrotation seit letztem reset()."""
         return abs(self._accum)
 
-    @property
-    def signed_deg(self) -> float:
-        """Rotation mit Vorzeichen (+ = rechts, - = links)."""
-        return self._accum
-
-
-# ── Hilfsfunktionen ───────────────────────────────────────────────────────────
-
+# --- Hilfsfunktionen ---
 def open_camera() -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)   # Linux / Raspberry Pi
+    cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
     if not cap.isOpened():
         cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():
-        logger.error("Kamera %d konnte nicht geöffnet werden!", CAMERA_INDEX)
+        logger.error("Camera %d could not be opened.", CAMERA_INDEX)
         sys.exit(1)
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  FRAME_WIDTH)
@@ -147,13 +88,11 @@ def open_camera() -> cv2.VideoCapture:
     actual_w   = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h   = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     actual_fps = cap.get(cv2.CAP_PROP_FPS)
-    logger.info("Kamera: %dx%d @ %.0f FPS", actual_w, actual_h, actual_fps)
+    logger.info("Camera: %dx%d @ %.0f FPS", actual_w, actual_h, actual_fps)
     return cap
-
 
 STATE_COLORS = {
     State.FOLLOWING:   (0,   220,   0),
-    State.ALIGNING:    (0,   100, 255),
     State.SEARCHING:   (0,   165, 255),
     State.PAUSED:      (0,     0, 220),
     State.RED_STOP:    (0,     0, 200),
@@ -162,12 +101,10 @@ STATE_COLORS = {
     State.TERMINAL:    (60,   60,  60),
 }
 
-def draw_hud(frame, state: str, speed: float, extra: str = ""):
-    """Zeichnet Status-HUD unten im Frame."""
+def draw_hud_on_video(frame, state: str, speed: float, extra: str = ""):
     h, w = frame.shape[:2]
     color = STATE_COLORS.get(state, (200, 200, 200))
 
-    # Hintergrundbalken
     cv2.rectangle(frame, (0, h - 55), (w, h), (30, 30, 30), -1)
 
     label = f"[{state}]"
@@ -175,25 +112,23 @@ def draw_hud(frame, state: str, speed: float, extra: str = ""):
         label += f"  {extra}"
     cv2.putText(frame, label, (10, h - 32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.70, color, 2)
-    cv2.putText(frame, f"Speed-Basis: {speed:.2f}   Q=Beenden  P=Pause  +/-=Speed  M=Maske",
+    cv2.putText(frame, f"Speed-Basis: {speed:.2f}",
                 (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
 
 
-# ── Hauptprogramm ─────────────────────────────────────────────────────────────
-
+# --- Hauptprogramm ---
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Wave Rover – Grüner Pfad Folger",
+        description="Wave Rover Path-Follower",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=(
             "Beispiele:\n"
-            "  python main.py                  # Config-Defaults verwenden\n"
+            "  python main.py                  # Config-Defaults verwenden,\n"
             "  python main.py --no-web         # Web-Dashboard deaktivieren (spart RAM/CPU)\n"
             "  python main.py --window         # OpenCV-Fenster anzeigen (nur mit Monitor)\n"
             "  python main.py --no-web --window\n"
         ),
     )
-    # BooleanOptionalAction erzeugt automatisch --foo und --no-foo
     p.add_argument(
         "--web",
         default=None,
@@ -218,18 +153,16 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Kommandozeile überschreibt config.py, nur wenn Flag explizit gesetzt wurde
     use_web_server = args.web    if args.web    is not None else DEBUG_WEB_SERVER
     use_window     = args.window if args.window is not None else DEBUG_WINDOW
 
     logger.info("=" * 55)
-    logger.info("  Wave Rover – Grüner Pfad Folger")
+    logger.info("  Wave Rover Path-Follower")
     logger.info("  Web-Dashboard: %s  |  OpenCV-Fenster: %s",
                 "AN" if use_web_server else "AUS",
                 "AN" if use_window     else "AUS")
     logger.info("=" * 55)
 
-    # Rover verbinden
     rover = RoverController()
     if not rover.connect():
         answer = input("Rover nicht erreichbar. Trotzdem fortfahren (nur Kamera)? [j/N]: ")
@@ -240,7 +173,7 @@ def main():
     cap      = open_camera()
     detector = PathDetector()
 
-    # ── Web-Debug-Server starten ──────────────────────────────────────────────
+    # --- Web-Debug-Server starten ---
     debug_srv: Optional[DebugServer] = None
     if use_web_server:
         try:
@@ -249,43 +182,32 @@ def main():
         except ImportError as e:
             logger.warning("Web-Debug deaktiviert: %s", e)
 
-    # ── Zustandsvariablen ─────────────────────────────────────────────────────
+    # --- Zustandsvariablen ---
     state          = State.FOLLOWING
     base_speed     = SPEED_FORWARD
     search_dir     = SEARCH_DIRECTION
     show_mask      = DEBUG_SHOW_MASK
-    show_red_mask  = False   # R-Taste: Rot-Maske im separaten Fenster anzeigen
+    show_red_mask  = False
     prev_error          = 0.0
-    aligning_stripe     = False   # True während Phase-2-Rotation (Hysterese-Flag)
-    align_stripe_t      = 0.0     # Zeitpunkt: aktuelle Phase-2-Episode begann
-    timeout_boost_end_t = 0.0     # Zeitpunkt bis wann nach Phase-2-Timeout Vollgas gilt
-    last_forward_t      = time.time()  # Letztes Mal vorwärts gefahren (Stuck-Erkennung)
+    aligning_stripe     = False   
+    align_stripe_t      = 0.0     
+    timeout_boost_end_t = 0.0     
+    last_forward_t      = time.time()
 
-    last_seen_t    = time.time()    # Zeitpunkt: Pfad zuletzt gesehen
-    align_start_t  = 0.0            # Zeitpunkt: Ausrichtung begonnen
-    align_dir      = "left"         # Richtung der aktuellen Ausrichtung
-    search_dir_t   = time.time()    # Zeitpunkt: aktuelle Suchrichtung begonnen
-
-    # Auf welcher Seite des Sichtfeldes der Pfad zuletzt gesehen wurde.
-    last_seen_side = SEARCH_DIRECTION  # Fallback: konfigurierter Standardwert
+    last_seen_t    = time.time()
+    last_seen_side = SEARCH_DIRECTION
 
     heading        = HeadingTracker(ROTATE_DEG_PER_SEC)
-
-    # ── Rote-Markierung-Sequenz ───────────────────────────────────────────────
-    # follow_state: gibt an, zu welchem Fahr-Zustand ALIGNING/SEARCHING zurückspringen.
-    #   → FOLLOWING  während der Hinfahrt
-    #   → RETURNING  während der Rückfahrt
-    # So folgen Ausrichtung und Suche automatisch dem richtigen Modus.
-    follow_state      = State.FOLLOWING  # aktueller Fahr-Modus (ändert sich bei Rückfahrt)
-    red_stop_t        = 0.0              # Zeitpunkt: erste rote Markierung gesehen
-    red_area_last     = 0                # Größe der zuletzt erkannten roten Fläche (Debug)
-    red_cooldown_end_t = 0.0             # Rot-Sperre aktiv bis dieser Zeitpunkt (0 = keine)
+    follow_state      = State.FOLLOWING
+    red_stop_t        = 0.0
+    red_area_last     = 0
+    red_cooldown_end_t = 0.0
 
     frame_count    = 0
     fps_t          = time.time()
     fps_display    = 0.0
 
-    logger.info("▶  Läuft – grünen Streifen vor die Kamera legen.")
+    logger.info("Running - waiting for stripe...")
 
     try:
         while True:
@@ -297,11 +219,10 @@ def main():
             frame_count += 1
             now = time.time()
 
-            # ── Pfaderkennung ─────────────────────────────────────────────────
+            # --- Pfaderkennung ---
             result, debug_frame = detector.process(frame)
 
-            # Rote Markierung prüfen – nur während Fahr-Zuständen relevant.
-            # detect_red() ist günstig (nutzt den bereits berechneten ROI).
+            # Rote Markierung prüfen, nur während Fahrt relevant
             red_detected  = False
             red_on_cooldown = now < red_cooldown_end_t
             if state in (State.FOLLOWING, State.RETURNING) and not red_on_cooldown:
@@ -322,17 +243,16 @@ def main():
                 cv2.putText(debug_frame, f"ROT gesperrt  noch {remaining_cd:.0f}s",
                             (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (180, 180, 255), 2)
 
-            # ── Zustandsmaschine ──────────────────────────────────────────────
+            # --- Zustandsmaschine ---
             hud_extra = ""
 
             if state == State.TERMINAL:
-                # ── TERMINAL: Zweite rote Markierung – sofort beenden ─────────
                 rover.stop()
-                logger.info("🏁 TERMINAL – zweite rote Markierung. Programm beendet.")
+                logger.info("TERMINAL - end reached, terminating program...")
                 break
 
             elif state == State.RED_STOP:
-                # ── RED_STOP: Erste rote Markierung – stehe, warte auf Signal ─
+                # RED_STOP: Erste rote Markierung
                 rover.stop()
                 elapsed = now - red_stop_t
                 remaining = max(0.0, RED_STOP_WAIT_S - elapsed)
@@ -341,29 +261,26 @@ def main():
 
                 if elapsed >= RED_STOP_WAIT_S:
                     logger.info(
-                        "📡 Signal empfangen (Dummy nach %.0fs) – starte 180°-Drehung",
+                        "Signal recieved after %.0fs), returning...",
                         RED_STOP_WAIT_S
                     )
                     state = State.TURNING_180
                     heading.reset()
 
             elif state == State.TURNING_180:
-                # ── TURNING_180: 180° drehen, dann Rückfahrt ──────────────────
-                # Immer nach links drehen (konsistente Richtung).
                 heading.update("left", now)
                 rotated = heading.abs_deg
                 hud_extra = f"dreht 180°  {rotated:.0f}°/180°"
 
-                if rotated >= 175.0:   # 175° reicht – Kalibriertoleranz
+                if rotated >= 175.0:
                     rover.stop()
                     heading.reset()
                     follow_state       = State.RETURNING
                     state              = State.RETURNING
                     last_seen_side     = SEARCH_DIRECTION
                     prev_error         = 0.0
-                    # Rot-Sperre starten: Rover fährt gerade erst über die
-                    # erste Markierung weg → für RED_COOLDOWN_S keine Auslösung.
                     red_cooldown_end_t = now + RED_COOLDOWN_S
+
                     logger.info(
                         "Rückfahrt beginnt – Rot gesperrt für %.0fs",
                         RED_COOLDOWN_S
@@ -371,81 +288,13 @@ def main():
                 else:
                     rover.turn_in_place(TURN_180_SPD, direction="left")
 
-            elif state == State.PAUSED:
-                rover.stop()
-                hud_extra = "P drücken zum Fortfahren"
-
-            elif state == State.ALIGNING:
-                # ── ALIGNING: Stopp → drehen bis Knick weg ───────────────────
-                #
-                # Rückwärts-Schutz: Rotationslimit über HeadingTracker.
-                # Mehr als MAX_ALIGN_ROTATION_DEG (90°) drehen würde den Rover
-                # über 90° von der Vorwärtsrichtung wegbewegen → rückwärts.
-                # Deshalb: Limit überschritten → sofort zu FOLLOWING, Rotation stoppen.
-
-                heading.update(align_dir, now)
-                elapsed          = now - align_start_t
-                rotated_deg      = heading.abs_deg
-
-                if not result.found:
-                    logger.warning(
-                        "Pfad während Ausrichtung verloren (%.0f° gedreht) – Suche",
-                        rotated_deg
-                    )
-                    heading.reset()
-                    state = State.SEARCHING
-                    search_dir   = align_dir          # Suche in gleicher Richtung
-                    search_dir_t = now
-                    rover.stop()
-
-                elif rotated_deg >= MAX_ALIGN_ROTATION_DEG:
-                    # Limit erreicht – weiter drehen würde Rückwärtsfahren verursachen
-                    logger.warning(
-                        "⛔ Rotationslimit (%.0f°/%.0f°) – stoppe Ausrichtung",
-                        rotated_deg, MAX_ALIGN_ROTATION_DEG
-                    )
-                    heading.reset()
-                    state      = follow_state   # FOLLOWING oder RETURNING
-                    prev_error = 0.0
-                    rover.stop()
-
-                elif result.bend_angle_deg < BEND_ALIGN_DEG:
-                    logger.info(
-                        "✅ Ausgerichtet (Winkel=%.1f°, %.0f° gedreht) – weiterfahren",
-                        result.bend_angle_deg, rotated_deg
-                    )
-                    heading.reset()
-                    state      = follow_state   # FOLLOWING oder RETURNING
-                    prev_error = 0.0
-
-                elif elapsed > ALIGN_TIMEOUT_S:
-                    logger.warning(
-                        "Ausrichtungs-Timeout (%.1fs, %.0f° gedreht)",
-                        elapsed, rotated_deg
-                    )
-                    heading.reset()
-                    state = follow_state        # FOLLOWING oder RETURNING
-
-                else:
-                    rover.turn_in_place(ALIGN_ROTATE_SPD, direction=align_dir)
-                    hud_extra = (
-                        f"dreht {align_dir.upper()}  "
-                        f"{rotated_deg:.0f}°/{MAX_ALIGN_ROTATION_DEG:.0f}°  "
-                        f"Knick={result.bend_angle_deg:.1f}°"
-                    )
-                    if DEBUG_PRINT_SPEED:
-                        logger.debug(
-                            "ALIGN  dir=%s  rotiert=%.0f°  knick=%.1f°",
-                            align_dir, rotated_deg, result.bend_angle_deg
-                        )
+            # elif state == State.PAUSED:
+            #     rover.stop()
+            #     hud_extra = "P drücken zum Fortfahren"
 
             elif state == State.SEARCHING:
-                # ── SEARCHING: Pfad verloren → drehen und suchen ──────────────
-                #
-                # Rückwärts-Schutz: Pro Richtung maximal MAX_SEARCH_ROTATION_DEG
-                # drehen, dann Richtung umkehren. Da MAX_SEARCH_ROTATION_DEG < 180°,
-                # schaut der Rover nie in die Gegenrichtung.
-
+                # Drehen und Pfad suchen
+                
                 heading.update(search_dir, now)
                 rotated_deg = heading.abs_deg
 
@@ -454,21 +303,22 @@ def main():
                         "Pfad wiedergefunden (%.0f° gesucht) – weiterfahren",
                         rotated_deg
                     )
+
                     heading.reset()
-                    state       = follow_state  # FOLLOWING oder RETURNING
+                    state       = follow_state
                     last_seen_t = now
                     prev_error  = 0.0
 
                 elif rotated_deg >= MAX_SEARCH_ROTATION_DEG:
-                    # Richtungsumkehr – nie über 150° in eine Richtung
                     old_dir    = search_dir
                     search_dir = "right" if search_dir == "left" else "left"
-                    search_dir_t = now
                     heading.reset()
+
                     logger.info(
                         "Suchlimit %.0f° → Richtung %s → %s",
                         MAX_SEARCH_ROTATION_DEG, old_dir, search_dir
                     )
+
                     rover.stop()
 
                 else:
@@ -479,22 +329,16 @@ def main():
                     )
 
             elif state in (State.FOLLOWING, State.RETURNING):
-                # ── FOLLOWING / RETURNING: Pfad folgen ───────────────────────
+                # FOLLOWING / RETURNING: Pfad folgen
 
-                # ── Stuck-Erkennung: kein Vorwärts seit STUCK_RESET_S → Reset ─
-                # last_forward_t wird in Phase 1 + Phase 3 auf `now` gesetzt.
-                # Wenn der Rover nur dreht/steht (Phase 2, ALIGNING, kein Pfad)
-                # läuft der Timer weiter. Nach STUCK_RESET_S kompletter Reset.
                 if now - last_forward_t > STUCK_RESET_S:
                     logger.warning(
                         "Stuck-Reset: seit %.0fs keine Vorwärtsbewegung – Ausrichtung neu "
                         "(Fahrmodus bleibt: %s)",
                         now - last_forward_t, follow_state,
                     )
-                    # Nur Ausrichtungs-/Bewegungs-State zurücksetzen.
-                    # follow_state (FOLLOWING vs RETURNING) und red_cooldown_end_t
-                    # NICHT anfassen – sonst vergisst der Bot die rote Markierung!
-                    state               = follow_state   # bleibt FOLLOWING oder RETURNING
+
+                    state               = follow_state
                     aligning_stripe     = False
                     align_stripe_t      = 0.0
                     timeout_boost_end_t = 0.0
@@ -504,21 +348,18 @@ def main():
                     rover.stop()
                     continue
 
-                # Rote Markierung auslösen:
-                #   FOLLOWING  → erste rote Markierung  → RED_STOP
-                #   RETURNING  → zweite rote Markierung → TERMINAL
                 if red_detected:
                     rover.stop()
                     if state == State.FOLLOWING:
                         logger.info(
-                            "🔴 Erste rote Markierung erkannt (%d px) – warte auf Signal",
+                            "Erste rote Markierung erkannt (%d px) – warte auf Signal",
                             red_area_last
                         )
                         state      = State.RED_STOP
                         red_stop_t = now
                     else:   # RETURNING
                         logger.info(
-                            "🔴 Zweite rote Markierung erkannt (%d px) – terminiere",
+                            "Zweite rote Markierung erkannt (%d px) – terminiere",
                             red_area_last
                         )
                         state = State.TERMINAL
@@ -527,56 +368,31 @@ def main():
                 if not result.found:
                     lost = now - last_seen_t
                     if lost < SEARCH_TIMEOUT_S * 0.3:
-                        rover.forward(base_speed * 0.4)   # kurz weiterrollen
+                        rover.forward(base_speed * 0.4)
                     else:
                         logger.info(
-                            "Pfad verloren (%.1fs) – suche zuerst %s (zuletzt dort gesehen)",
+                            "Path lost (%.1fs), looking %s first...",
                             lost, last_seen_side
                         )
                         state        = State.SEARCHING
                         search_dir   = last_seen_side
-                        search_dir_t = now
                         heading.reset()
                         rover.stop()
                 else:
                     last_seen_t = now
 
-                    # Seite merken auf der der Pfad gerade sichtbar ist.
-                    # Nur aktualisieren wenn Pfad merklich links oder rechts ist
-                    # (nicht im toten Bereich), damit das Ergebnis stabil bleibt.
                     if not result.in_dead_zone:
                         last_seen_side = "left" if result.offset_normalized < 0 else "right"
 
-                    # ── Drei-Phasen-Lenkung (deadlock-sicher) ───────────────
-                    #
-                    # Phase 1 – ANNÄHERN  (Streifen außerhalb Mitte):
-                    #   Lateral zulenken mit base_speed. speed_factor ignoriert –
-                    #   Knick-Erkennung könnte ihn sonst auf 0 setzen (kein echter
-                    #   Knick, nur Rover-Fehllage).
-                    #
-                    # Phase 2 – AUSRICHTEN (aligning_stripe=True AND in dead zone):
-                    #   Auf der Stelle drehen bis Winkel < STRIPE_ALIGN_EXIT_DEG.
-                    #
-                    # Phase 3 – FOLGEN (aligning_stripe=False AND in dead zone):
-                    #   Normale Kurvenfahrt + Knick-Check.
-                    #
-                    # Deadlock-Schutz:
-                    #   aligning_stripe ändert sich NUR durch den Winkel, NICHT durch
-                    #   die dead zone. Damit bleibt Phase 2 aktiv wenn der Streifen
-                    #   kurz rauswandert (Phase 1 holt ihn zurück, dann Phase 2 weiter).
-                    #   Timeout nach STRIPE_ALIGN_TIMEOUT_S verhindert Endlos-Rotation.
                     stripe_angle = result.stripe_angle_deg
 
-                    # ── aligning_stripe aktualisieren (nur winkelbasiert) ─────
                     if abs(stripe_angle) > STRIPE_ALIGN_TOL_DEG:
                         if not aligning_stripe:
-                            align_stripe_t = now        # Timer starten
+                            align_stripe_t = now
                         aligning_stripe = True
                     elif abs(stripe_angle) < STRIPE_ALIGN_EXIT_DEG:
                         aligning_stripe = False
-                    # Hysterese-Bereich [EXIT_DEG … TOL_DEG]: kein Zustandswechsel
 
-                    # ── Timeout-Schutz (Deadlock 3: Endlosrotation) ──────────
                     if aligning_stripe and (now - align_stripe_t) > STRIPE_ALIGN_TIMEOUT_S:
                         logger.warning(
                             "Phase-2 Timeout nach %.1fs (Winkel %+.1f°) – %.1fs Vollgas",
@@ -585,9 +401,7 @@ def main():
                         aligning_stripe     = False
                         timeout_boost_end_t = now + STRIPE_ALIGN_BOOST_S
 
-                    # ── Phasen ausführen (Phase 1 hat Vorrang vor Phase 2) ───
                     if not result.in_dead_zone:
-                        # Phase 1: ANNÄHERN ──────────────────────────────────
                         # aligning_stripe bleibt unverändert – Phase 2 setzt
                         # dort weiter an, sobald Streifen wieder zentriert ist.
                         rover.steer(
@@ -602,44 +416,30 @@ def main():
                         hud_extra      = f"Annähern  off={result.offset_normalized:+.2f}"
 
                     elif aligning_stripe:
-                        # Phase 2: AUSRICHTEN ────────────────────────────────
                         align_dir_now = "right" if stripe_angle > 0 else "left"
                         rover.turn_in_place(STRIPE_ALIGN_SPD, direction=align_dir_now)
                         prev_error = 0.0
                         hud_extra  = f"Ausrichten {stripe_angle:+.0f}° ({align_dir_now})"
 
                     else:
-                        # Phase 3: FOLGEN ────────────────────────────────────
-                        # Vollgas-Boost nach Phase-2-Timeout (STRIPE_ALIGN_BOOST_S Sek.)
                         boost_active  = now < timeout_boost_end_t
                         current_speed = base_speed if boost_active else base_speed * result.speed_factor
-                        # Scharfer-Knick-Check deaktiviert (ALIGNING-Zustand auskommentiert)
-                        # if result.is_sharp_bend:
-                        #     logger.info(
-                        #         "⚠ Scharfer Knick erkannt (%.1f°, %s) – halte an",
-                        #         result.bend_angle_deg, result.bend_direction
-                        #     )
-                        #     state         = State.ALIGNING
-                        #     align_start_t = now
-                        #     align_dir     = result.bend_direction if result.bend_direction != "none" else "left"
-                        #     heading.reset()
-                        #     rover.stop()
-                        # else:
-                        if True:
-                            rover.steer(
-                                current_speed,
-                                result.offset_normalized,
-                                turn_max=SPEED_TURN_MAX,
-                                kp=KP, kd=KD,
-                                prev_error=prev_error,
-                            )
-                            prev_error     = result.offset_normalized
-                            last_forward_t = now
-                            hud_extra      = (
-                                f"Kurve {result.bend_angle_deg:.0f}°  off={result.offset_normalized:+.2f}"
-                                if result.speed_factor < 1.0 else
-                                f"BOOST {timeout_boost_end_t - now:.1f}s" if boost_active else ""
-                            )
+
+                        rover.steer(
+                            current_speed,
+                            result.offset_normalized,
+                            turn_max=SPEED_TURN_MAX,
+                            kp=KP, kd=KD,
+                            prev_error=prev_error,
+                        )
+
+                        prev_error     = result.offset_normalized
+                        last_forward_t = now
+                        hud_extra      = (
+                            f"Kurve {result.bend_angle_deg:.0f}°  off={result.offset_normalized:+.2f}"
+                            if result.speed_factor < 1.0 else
+                            f"BOOST {timeout_boost_end_t - now:.1f}s" if boost_active else ""
+                        )
 
                     if DEBUG_PRINT_SPEED:
                         phase_name = (
@@ -654,12 +454,12 @@ def main():
                             result.speed_factor,
                         )
 
-            # ── FPS ───────────────────────────────────────────────────────────
+            # --- FPS ---
             if frame_count % 30 == 0:
                 fps_display = 30.0 / max(now - fps_t, 1e-9)
                 fps_t = now
 
-            # ── Web-Debug-Server aktualisieren ────────────────────────────────
+            # --- Web-Debug-Server aktualisieren ---
             if debug_srv is not None:
                 current_speed = base_speed * (result.speed_factor if result.found else 1.0)
                 debug_srv.push(
@@ -692,33 +492,33 @@ def main():
                         (debug_frame.shape[1] - 95, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
-            # ── Debug-Ausgabe ──────────────────────────────────────────────────
+            # --- Debug-Ausgabe ---
             if use_window:
-                draw_hud(debug_frame, state, base_speed, hud_extra)
-                cv2.imshow("Wave Rover – Pfadfolger", debug_frame)
+                draw_hud_on_video(debug_frame, state, base_speed, hud_extra)
+                cv2.imshow("Wave Rover Path-Follower", debug_frame)
 
                 if show_mask:
-                    cv2.imshow("Gruen-Maske", detector.get_last_mask())
+                    cv2.imshow("Green Mask", detector.get_last_mask())
                 else:
                     try:
-                        cv2.destroyWindow("Gruen-Maske")
+                        cv2.destroyWindow("Green Mask")
                     except Exception:
                         pass
 
                 if show_red_mask:
                     red_dbg = detector.get_last_red_mask()
                     if red_dbg is not None:
-                        # Rot-Maske als BGR-Bild einfärben (rot = erkannte Pixel)
+                        # Rot-Maske als BGR-Bild einfärben
                         red_vis = cv2.cvtColor(red_dbg, cv2.COLOR_GRAY2BGR)
                         red_vis[red_dbg > 0] = (0, 0, 220)
                         cv2.putText(red_vis,
                                     f"Rot-Px: {red_area_last}  Schwelle: 10000",
                                     (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                                     (255, 255, 255), 1)
-                        cv2.imshow("Rot-Maske (R=schliessen)", red_vis)
+                        cv2.imshow("Red Mask (R=close)", red_vis)
                 else:
                     try:
-                        cv2.destroyWindow("Rot-Maske (R=schliessen)")
+                        cv2.destroyWindow("Red Mask (R=close)")
                     except Exception:
                         pass
 
