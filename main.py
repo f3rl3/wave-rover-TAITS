@@ -520,23 +520,26 @@ def main():
 
                     # ── Drei-Phasen-Lenkung ──────────────────────────────────
                     # Phase 1 – ANNÄHERN  (Streifen außerhalb Mitte):
-                    #   Lateral auf den Streifen zulenken. Rover fährt vorwärts.
-                    #   Kein Winkel, kein Knick-Check – erst ankommen, dann ausrichten.
+                    #   Lateral auf Streifen zulenken, immer mit base_speed.
+                    #   speed_factor wird IGNORIERT: Knick-Erkennung misst den Winkel
+                    #   zwischen FERN- und NAH-Zone – wenn der Rover schräg steht,
+                    #   erscheint das als "Kurve" und würde speed_factor auf 0 setzen.
+                    #   Das wäre falsch: kein echter Knick, nur Rover-Fehllage.
                     #
-                    # Phase 2 – AUSRICHTEN (Streifen mittig, aber Winkel zu groß):
-                    #   Rover stoppt Vorwärtsfahrt und dreht sich AUF DER STELLE.
-                    #   Bleibt in Phase 2 bis Streifen senkrecht steht (< STRIPE_ALIGN_TOL_DEG).
+                    # Phase 2 – AUSRICHTEN (Streifen mittig, Winkel zu groß):
+                    #   Rover stoppt Vorwärtsfahrt, dreht AUF DER STELLE.
+                    #   Bleibt hier bis stripe_angle < STRIPE_ALIGN_TOL_DEG.
                     #
                     # Phase 3 – FOLGEN    (Streifen mittig + ausgerichtet):
-                    #   Normale Vorwärtsfahrt. Erst hier wird Knick-Erkennung geprüft.
-                    current_speed  = base_speed * result.speed_factor
+                    #   Normale Kurvenfahrt mit speed_factor. Erst hier: Knick-Check.
                     stripe_angle   = result.stripe_angle_deg
                     stripe_aligned = abs(stripe_angle) <= STRIPE_ALIGN_TOL_DEG
 
                     if not result.in_dead_zone:
-                        # ── Phase 1: ANNÄHERN ─────────────────────────────────
+                        # ── Phase 1: ANNÄHERN ──────────────────────────────────
+                        # Immer mit base_speed – speed_factor hier nicht anwenden!
                         rover.steer(
-                            current_speed,
+                            base_speed,
                             result.offset_normalized,
                             turn_max=SPEED_TURN_MAX,
                             kp=KP, kd=KD,
@@ -548,16 +551,16 @@ def main():
                     elif not stripe_aligned:
                         # ── Phase 2: AUSRICHTEN ────────────────────────────────
                         # Streifen ist mittig ABER Winkel falsch → auf der Stelle drehen.
-                        # Rover stoppt vorwärts – dreht sich bis Winkel < Toleranz.
                         align_dir_now = "right" if stripe_angle > 0 else "left"
                         rover.turn_in_place(STRIPE_ALIGN_SPD, direction=align_dir_now)
-                        prev_error = 0.0   # D-Anteil zurücksetzen (kein lateraler Fehler)
+                        prev_error = 0.0   # D-Anteil zurücksetzen nach Stopp
                         hud_extra  = f"Ausrichten {stripe_angle:+.0f}° ({align_dir_now})"
 
                     else:
                         # ── Phase 3: FOLGEN ────────────────────────────────────
-                        # Streifen mittig UND ausgerichtet → normale Fahrt.
-                        # Erst hier Knick-Erkennung (ALIGNING) prüfen.
+                        # Streifen mittig UND ausgerichtet → normale Kurvenfahrt.
+                        # Jetzt speed_factor und Knick-Check aktiv.
+                        current_speed = base_speed * result.speed_factor
                         if result.is_sharp_bend:
                             logger.info(
                                 "⚠ Scharfer Knick erkannt (%.1f°, %s) – halte an und richte aus",
