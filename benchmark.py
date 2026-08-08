@@ -1,158 +1,169 @@
 """
-Kamera-Benchmark: Auflösung vs. Geschwindigkeit
-================================================
-Testet verschiedene Auflösungen und misst:
-  - Kamera-FPS      (wie schnell Frames geliefert werden)
-  - Verarbeitungs-ms (wie lange detector.process() dauert)
-  - Gesamt-FPS      (was der Main-Loop tatsächlich schafft)
+Kamera-Benchmark: Seitenverhältnis vs. Verarbeitungsgeschwindigkeit
+====================================================================
+Testet Auflösungen mit gleicher Pixelfläche aber unterschiedlichem
+Seitenverhältnis (z.B. 640×240 vs. 480×320 vs. 320×480).
 
-Ergebnisse werden in benchmark_results.json gespeichert.
-plot_results.py liest diese Datei und erstellt die Diagramme.
+Fragestellung:
+  Beeinflusst das Seitenverhältnis die FPS-Leistung bei gleicher Pixelzahl?
+  Hilft ein breiteres Bild (mehr links/rechts) oder höheres Bild (mehr vorne/hinten)?
+
+Ergebnisse → benchmark_results.json
+Diagramm   → python plot_results.py
 
 Verwendung:
-    python benchmark.py                    # alle vordefinierten Auflösungen
-    python benchmark.py --frames 200       # 200 Frames pro Test
-    python benchmark.py --res 640x480 1280x720   # nur bestimmte Auflösungen
+    python benchmark.py                  # alle vordefinierten Gruppen
+    python benchmark.py --frames 150     # 150 Frames pro Auflösung
+    python benchmark.py --camera 1       # Kamera-Index 1
 """
 
 import argparse
 import json
 import time
 import cv2
-import numpy as np
 from pathlib import Path
 
-# Pfad-Detektor aus dem Hauptprojekt importieren
 from path_detector import PathDetector
 
-# ── Standardauflösungen ───────────────────────────────────────────────────────
-DEFAULT_RESOLUTIONS = [
-    (320,  240),
-    (640,  480),
-    (800,  600),
-    (1280, 720),
-    (1920, 1080),
+# ── Auflösungsgruppen: gleiche Pixelfläche, verschiedene Seitenverhältnisse ───
+#
+# Drei Pixelklassen, jeweils 4 Seitenverhältnisse:
+#   Breit   = mehr links/rechts Sichtfeld (besser fürs Lenken?)
+#   Mittel  = ausgewogen
+#   Hoch    = mehr vorne/hinten Sichtfeld (besser für Kurven?)
+#   Sehr hoch = extremes Hochformat
+#
+RESOLUTION_GROUPS = [
+    {
+        "name":  "~76 K Pixel",
+        "resolutions": [
+            (480, 160),   # 3:1  – sehr breit
+            (320, 240),   # 4:3  – klassisch breit
+            (240, 320),   # 3:4  – leicht hoch
+            (160, 480),   # 1:3  – sehr hoch
+        ],
+    },
+    {
+        "name": "~150 K Pixel",
+        "resolutions": [
+            (640, 240),   # 8:3  – sehr breit
+            (480, 320),   # 3:2  – breit
+            (320, 480),   # 2:3  – hoch
+            (240, 640),   # 3:8  – sehr hoch
+        ],
+    },
+    {
+        "name": "~300 K Pixel",
+        "resolutions": [
+            (800, 384),   # ~2:1 – breit
+            (640, 480),   # 4:3  – ausgewogen
+            (480, 640),   # 3:4  – hoch
+            (384, 800),   # ~1:2 – sehr hoch
+        ],
+    },
 ]
 
-OUTPUT_FILE = Path(__file__).parent / "benchmark_results.json"
-WARMUP_FRAMES = 15   # wird gemessen aber nicht gewertet
+TARGET_FPS    = 30
+WARMUP_FRAMES = 20
+OUTPUT_FILE   = Path(__file__).parent / "benchmark_results.json"
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Kamera-Benchmark Auflösung vs. FPS")
-    p.add_argument(
-        "--res", nargs="+", metavar="WxH",
-        help="Auflösungen zum Testen, z.B. 640x480 1280x720"
-    )
-    p.add_argument(
-        "--frames", type=int, default=100,
-        help="Anzahl Frames pro Auflösung (Standard: 100)"
-    )
-    p.add_argument(
-        "--camera", type=int, default=0,
-        help="Kamera-Index (Standard: 0)"
-    )
+    p = argparse.ArgumentParser(description="Kamera-Benchmark: Seitenverhältnis vs. FPS")
+    p.add_argument("--frames", type=int, default=100,
+                   help="Frames pro Auflösung (Standard: 100)")
+    p.add_argument("--camera", type=int, default=0,
+                   help="Kamera-Index (Standard: 0)")
     return p.parse_args()
 
 
-def parse_resolution(s: str):
-    try:
-        w, h = s.lower().split("x")
-        return int(w), int(h)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"Ungültiges Format '{s}', erwartet: WxH")
+def aspect_label(w: int, h: int) -> str:
+    """Gibt 'Breit' / 'Ausgewogen' / 'Hoch' zurück je nach Seitenverhältnis."""
+    ratio = w / h
+    if ratio >= 2.5:   return "sehr breit"
+    if ratio >= 1.4:   return "breit"
+    if ratio >= 0.85:  return "ausgewogen"
+    if ratio >= 0.45:  return "hoch"
+    return "sehr hoch"
 
 
-def benchmark_resolution(cap: cv2.VideoCapture, detector: PathDetector,
-                          width: int, height: int, n_frames: int) -> dict:
-    """Misst Kamera- und Verarbeitungszeit für eine Auflösung."""
+def benchmark_one(cap: cv2.VideoCapture, detector: PathDetector,
+                  width: int, height: int, n_frames: int,
+                  group_name: str) -> dict | None:
+    """Misst eine einzelne Auflösung."""
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_FPS, TARGET_FPS)
 
-    # Tatsächlich gesetzte Auflösung abfragen (Kamera rundet ggf. auf nächste)
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    ratio    = aspect_label(actual_w, actual_h)
 
-    print(f"\n  Auflösung: {width}×{height}  →  tatsächlich: {actual_w}×{actual_h}")
+    print(f"  {width}×{height:>4}  →  tatsächlich {actual_w}×{actual_h}  [{ratio}]")
 
-    capture_times   = []
-    process_times   = []
-    total_times     = []
-
-    frames_done = 0
-    phase = "Aufwärmen"
+    capture_ms_list = []
+    process_ms_list = []
 
     for i in range(WARMUP_FRAMES + n_frames):
-        if i == WARMUP_FRAMES:
-            phase = "Messen"
-            print(f"  {phase}... ", end="", flush=True)
-
         t0 = time.perf_counter()
         ret, frame = cap.read()
         t1 = time.perf_counter()
 
         if not ret or frame is None:
-            print(f"  ⚠ Kein Frame bei {width}×{height} – überspringe")
-            continue
+            print(f"    ⚠ Kein Frame – überspringe diese Auflösung")
+            return None
 
-        _, _ = detector.process(frame)
+        detector.process(frame)
         t2 = time.perf_counter()
 
         if i >= WARMUP_FRAMES:
-            capture_times.append((t1 - t0) * 1000)
-            process_times.append((t2 - t1) * 1000)
-            total_times.append((t2 - t0) * 1000)
-            frames_done += 1
+            capture_ms_list.append((t1 - t0) * 1000)
+            process_ms_list.append((t2 - t1) * 1000)
 
-    if frames_done == 0:
+    n = len(capture_ms_list)
+    if n == 0:
         return None
 
-    avg_capture = sum(capture_times) / frames_done
-    avg_process = sum(process_times) / frames_done
-    avg_total   = sum(total_times)   / frames_done
-    fps         = 1000.0 / avg_total if avg_total > 0 else 0
+    avg_cap  = sum(capture_ms_list) / n
+    avg_proc = sum(process_ms_list) / n
+    avg_tot  = avg_cap + avg_proc
+    fps      = 1000.0 / avg_tot if avg_tot > 0 else 0
 
-    print(f"fertig ({frames_done} Frames)")
-    print(f"    Capture:      {avg_capture:6.1f} ms/Frame")
-    print(f"    Verarbeitung: {avg_process:6.1f} ms/Frame")
-    print(f"    Gesamt:       {avg_total:6.1f} ms/Frame  →  {fps:.1f} FPS")
+    print(f"    capture {avg_cap:5.1f} ms  +  process {avg_proc:5.1f} ms  "
+          f"=  {avg_tot:5.1f} ms/Frame  →  {fps:.1f} FPS")
 
     return {
+        "group":        group_name,
         "requested_w":  width,
         "requested_h":  height,
         "actual_w":     actual_w,
         "actual_h":     actual_h,
+        "pixels":       actual_w * actual_h,
         "label":        f"{actual_w}×{actual_h}",
-        "n_frames":     frames_done,
-        "capture_ms":   round(avg_capture, 2),
-        "process_ms":   round(avg_process, 2),
-        "total_ms":     round(avg_total, 2),
+        "aspect":       ratio,
+        "aspect_ratio": round(actual_w / actual_h, 3),
+        "n_frames":     n,
+        "capture_ms":   round(avg_cap,  2),
+        "process_ms":   round(avg_proc, 2),
+        "total_ms":     round(avg_tot,  2),
         "fps":          round(fps, 2),
-        "capture_min":  round(min(capture_times), 2),
-        "capture_max":  round(max(capture_times), 2),
-        "process_min":  round(min(process_times), 2),
-        "process_max":  round(max(process_times), 2),
+        "capture_min":  round(min(capture_ms_list), 2),
+        "capture_max":  round(max(capture_ms_list), 2),
+        "process_min":  round(min(process_ms_list), 2),
+        "process_max":  round(max(process_ms_list), 2),
     }
 
 
 def main():
     args = parse_args()
 
-    # Auflösungen bestimmen
-    if args.res:
-        resolutions = [parse_resolution(r) for r in args.res]
-    else:
-        resolutions = DEFAULT_RESOLUTIONS
+    print("=" * 60)
+    print("  Benchmark: Seitenverhältnis vs. FPS (gleiche Pixelzahl)")
+    print("=" * 60)
+    print(f"  Kamera : {args.camera}  |  Frames/Test : {args.frames}")
+    print(f"  Ziel-FPS : {TARGET_FPS}  |  Warmup : {WARMUP_FRAMES} Frames")
 
-    print("=" * 55)
-    print("  Kamera-Benchmark: Auflösung vs. Geschwindigkeit")
-    print("=" * 55)
-    print(f"  Kamera-Index : {args.camera}")
-    print(f"  Frames/Test  : {args.frames}")
-    print(f"  Auflösungen  : {resolutions}")
-
-    # Kamera öffnen
     cap = cv2.VideoCapture(args.camera, cv2.CAP_V4L2)
     if not cap.isOpened():
         cap = cv2.VideoCapture(args.camera)
@@ -163,33 +174,41 @@ def main():
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     detector = PathDetector()
-    results = []
+    all_results = []
 
-    for w, h in resolutions:
-        r = benchmark_resolution(cap, detector, w, h, args.frames)
-        if r:
-            results.append(r)
+    for group in RESOLUTION_GROUPS:
+        print(f"\n── Gruppe: {group['name']} ──────────────────────────────")
+        for w, h in group["resolutions"]:
+            r = benchmark_one(cap, detector, w, h, args.frames, group["name"])
+            if r:
+                all_results.append(r)
 
     cap.release()
 
-    # Ergebnisse speichern
     output = {
-        "camera_index": args.camera,
+        "target_fps":      TARGET_FPS,
         "frames_per_test": args.frames,
-        "warmup_frames": WARMUP_FRAMES,
-        "results": results,
+        "warmup_frames":   WARMUP_FRAMES,
+        "groups":          [g["name"] for g in RESOLUTION_GROUPS],
+        "results":         all_results,
     }
     OUTPUT_FILE.write_text(json.dumps(output, indent=2), encoding="utf-8")
 
     print(f"\n✅ Ergebnisse gespeichert: {OUTPUT_FILE}")
-    print("   Diagramme erstellen mit:  python plot_results.py")
+    print("   Diagramm erstellen:  python plot_results.py")
 
-    # Kurze Zusammenfassung
-    print("\n── Zusammenfassung ──────────────────────────────")
-    print(f"  {'Auflösung':<14} {'FPS':>6}  {'Verarb. ms':>12}")
-    print(f"  {'-'*14} {'-'*6}  {'-'*12}")
-    for r in results:
-        print(f"  {r['label']:<14} {r['fps']:>6.1f}  {r['process_ms']:>10.1f} ms")
+    # Zusammenfassung pro Gruppe
+    print("\n── Zusammenfassung ──────────────────────────────────────────")
+    current_group = None
+    for r in all_results:
+        if r["group"] != current_group:
+            current_group = r["group"]
+            print(f"\n  {current_group}")
+            print(f"    {'Auflösung':<12} {'Verhältnis':<12} {'FPS':>6}  "
+                  f"{'Capture':>9}  {'Prozess':>9}")
+            print(f"    {'-'*12} {'-'*12} {'-'*6}  {'-'*9}  {'-'*9}")
+        print(f"    {r['label']:<12} {r['aspect']:<12} {r['fps']:>6.1f}  "
+              f"{r['capture_ms']:>7.1f} ms  {r['process_ms']:>7.1f} ms")
 
 
 if __name__ == "__main__":

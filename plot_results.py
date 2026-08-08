@@ -1,28 +1,29 @@
 """
-Diagramm-Generator: Auflösung vs. Geschwindigkeit
-==================================================
-Liest benchmark_results.json (erstellt von benchmark.py) und
-erzeugt ein Diagramm mit zwei Subplots:
+Diagramm-Generator: Seitenverhältnis vs. FPS
+=============================================
+Liest benchmark_results.json und zeigt:
 
-  1. FPS je Auflösung (Balkendiagramm)
-  2. Zeitaufschlüsselung: Capture-Zeit vs. Verarbeitungszeit (gestapelte Balken)
+  Oben:   Gruppierte Balken – pro Pixelklasse alle Seitenverhältnisse
+          → Vergleich: breit vs. hoch bei gleicher Pixelzahl
+          → Vergleich: wie skaliert FPS mit Pixelzahl?
 
-Das Bild wird als benchmark_results.png gespeichert und optional angezeigt.
+  Unten:  Zeitaufschlüsselung – Capture-Zeit vs. Verarbeitungszeit
+          → Wo ist der Flaschenhals?
 
 Verwendung:
-    python plot_results.py                      # liest benchmark_results.json
-    python plot_results.py --input my_data.json
-    python plot_results.py --no-show            # nur speichern, nicht anzeigen
-    python plot_results.py --output mein_plot.png
+    python plot_results.py
+    python plot_results.py --input meine_daten.json
+    python plot_results.py --output ergebnis.png --no-show
 """
 
 import argparse
 import json
 from pathlib import Path
+from itertools import groupby
 
 try:
     import matplotlib.pyplot as plt
-    import matplotlib.ticker as ticker
+    import matplotlib.patches as mpatches
     import numpy as np
 except ImportError:
     print("❌ matplotlib ist nicht installiert.")
@@ -32,113 +33,174 @@ except ImportError:
 DEFAULT_INPUT  = Path(__file__).parent / "benchmark_results.json"
 DEFAULT_OUTPUT = Path(__file__).parent / "benchmark_results.png"
 
+# Farben je Seitenverhältnis – von breit (blau) bis hoch (orange)
+ASPECT_COLORS = {
+    "sehr breit":  "#4fc3f7",  # hellblau
+    "breit":       "#42a5f5",  # blau
+    "ausgewogen":  "#66bb6a",  # grün
+    "hoch":        "#ef5350",  # rot-orange
+    "sehr hoch":   "#ff7043",  # orange
+}
+FALLBACK_COLORS = ["#ab47bc", "#26a69a", "#ffa726", "#78909c"]
+
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Diagramm: Auflösung vs. FPS")
-    p.add_argument("--input",  default=str(DEFAULT_INPUT),  help="Pfad zur JSON-Ergebnisdatei")
-    p.add_argument("--output", default=str(DEFAULT_OUTPUT), help="Ausgabepfad für das Bild (.png)")
-    p.add_argument("--no-show", action="store_true", help="Bild nicht anzeigen, nur speichern")
+    p = argparse.ArgumentParser(description="Diagramm: Seitenverhältnis vs. FPS")
+    p.add_argument("--input",  default=str(DEFAULT_INPUT))
+    p.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    p.add_argument("--no-show", action="store_true")
     return p.parse_args()
 
 
-def load_results(path: str) -> list:
+def load_data(path: str) -> tuple[list, list]:
     p = Path(path)
     if not p.exists():
         print(f"❌ Datei nicht gefunden: {p}")
         print("   Zuerst benchmark.py ausführen!")
         raise SystemExit(1)
-    data = json.loads(p.read_text(encoding="utf-8"))
-    results = data.get("results", [])
+    raw     = json.loads(p.read_text(encoding="utf-8"))
+    results = raw.get("results", [])
+    groups  = raw.get("groups", [])
     if not results:
-        print("❌ Keine Messergebnisse in der Datei gefunden.")
+        print("❌ Keine Ergebnisse in der Datei.")
         raise SystemExit(1)
-    return results
+    return results, groups
 
 
-def make_chart(results: list, output_path: str, show: bool):
-    labels       = [r["label"]      for r in results]
-    fps_vals     = [r["fps"]        for r in results]
-    capture_ms   = [r["capture_ms"] for r in results]
-    process_ms   = [r["process_ms"] for r in results]
-    pixels       = [r["actual_w"] * r["actual_h"] for r in results]
+def group_by_group(results: list, group_names: list) -> dict:
+    """Gibt {group_name: [result, ...]} zurück, sortiert nach group_names."""
+    grouped = {}
+    for name in group_names:
+        grouped[name] = [r for r in results if r["group"] == name]
+    # Gruppen ohne Treffer ignorieren
+    return {k: v for k, v in grouped.items() if v}
 
-    x = np.arange(len(labels))
-    bar_w = 0.55
 
-    fig, axes = plt.subplots(
-        nrows=2, ncols=1,
-        figsize=(max(7, len(labels) * 1.6), 9),
-        facecolor="#1e1e1e",
+def make_chart(results: list, group_names: list, output_path: str, show: bool):
+    grouped = group_by_group(results, group_names)
+    n_groups = len(grouped)
+
+    # Alle vorkommenden Seitenverhältnisse (für Legende + Farbzuweisung)
+    all_aspects = []
+    seen = set()
+    for r in results:
+        a = r["aspect"]
+        if a not in seen:
+            all_aspects.append(a)
+            seen.add(a)
+
+    # Farbmap aufbauen
+    color_map = {}
+    for aspect in all_aspects:
+        color_map[aspect] = ASPECT_COLORS.get(aspect, FALLBACK_COLORS[len(color_map) % len(FALLBACK_COLORS)])
+
+    # ── Layout ────────────────────────────────────────────────────────────────
+    fig, (ax1, ax2) = plt.subplots(
+        nrows=2, figsize=(max(8, n_groups * 2.8 + 2), 10),
+        facecolor="#1e1e1e"
     )
     fig.suptitle(
-        "Kamera-Benchmark: Auflösung vs. Geschwindigkeit",
-        color="white", fontsize=14, fontweight="bold", y=0.98
+        "Seitenverhältnis vs. FPS  (gleiche Pixelzahl pro Gruppe)",
+        color="white", fontsize=14, fontweight="bold", y=0.99
     )
 
-    # ── Subplot 1: FPS ─────────────────────────────────────────────────────────
-    ax1 = axes[0]
-    ax1.set_facecolor("#2a2a2a")
+    # Positionen der Gruppen-Cluster
+    group_labels = list(grouped.keys())
+    x_centers = np.arange(n_groups)
 
-    bars = ax1.bar(x, fps_vals, width=bar_w, color="#4fc3f7", edgecolor="#1e88e5", linewidth=0.8)
+    for ax in (ax1, ax2):
+        ax.set_facecolor("#2a2a2a")
+        ax.tick_params(colors="white")
+        ax.spines[:].set_color("#555")
+        ax.grid(axis="y", color="#444", linestyle=":", linewidth=0.7)
 
-    # Wert über jedem Balken
-    for bar, val in zip(bars, fps_vals):
-        ax1.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.4,
-            f"{val:.1f}",
-            ha="center", va="bottom", color="white", fontsize=10, fontweight="bold"
-        )
+    # ── Subplot 1: FPS ────────────────────────────────────────────────────────
+    max_fps = 0
+    bar_w   = 0.8 / max(max(len(v) for v in grouped.values()), 1)
 
-    # Ziel-FPS Linie (30 FPS)
+    for gi, (gname, entries) in enumerate(grouped.items()):
+        n = len(entries)
+        offsets = np.linspace(-(n - 1) / 2, (n - 1) / 2, n) * bar_w
+
+        for ei, (entry, offset) in enumerate(zip(entries, offsets)):
+            color = color_map.get(entry["aspect"], "#aaa")
+            bar = ax1.bar(
+                gi + offset, entry["fps"], width=bar_w * 0.88,
+                color=color, edgecolor="#111", linewidth=0.6
+            )
+            ax1.text(
+                gi + offset, entry["fps"] + 0.3,
+                f"{entry['fps']:.1f}",
+                ha="center", va="bottom", color="white", fontsize=8, fontweight="bold"
+            )
+            # Auflösungs-Label unter dem Balken
+            ax1.text(
+                gi + offset, -1.5,
+                entry["label"],
+                ha="center", va="top", color="#aaa", fontsize=7,
+                rotation=45
+            )
+            max_fps = max(max_fps, entry["fps"])
+
     ax1.axhline(30, color="#ffb74d", linestyle="--", linewidth=1.2, label="Ziel: 30 FPS")
-    ax1.legend(facecolor="#333", edgecolor="#555", labelcolor="white", fontsize=9)
-
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(labels, color="white", fontsize=10)
+    ax1.set_xticks(x_centers)
+    ax1.set_xticklabels(group_labels, color="white", fontsize=10)
     ax1.set_ylabel("FPS", color="white", fontsize=11)
-    ax1.set_title("Verarbeitungs-FPS je Auflösung", color="#bbbbbb", fontsize=11)
-    ax1.tick_params(colors="white")
-    ax1.spines[:].set_color("#555")
-    ax1.set_ylim(0, max(fps_vals) * 1.25)
-    ax1.yaxis.set_major_locator(ticker.MultipleLocator(5))
-    ax1.grid(axis="y", color="#444", linestyle=":", linewidth=0.7)
+    ax1.set_title("Verarbeitungs-FPS je Pixelklasse und Seitenverhältnis",
+                  color="#bbbbbb", fontsize=11)
+    ax1.set_ylim(-5, max_fps * 1.2)
+    ax1.set_xlim(-0.6, n_groups - 0.4)
 
-    # Pixelanzahl als sekundäre Info unter den Labels
-    pixel_labels = [f"{w*h//1000}K px" for r in results for w, h in [(r["actual_w"], r["actual_h"])]]
-    for xi, pl in zip(x, pixel_labels):
-        ax1.text(xi, -max(fps_vals) * 0.06, pl, ha="center", va="top",
-                 color="#888", fontsize=8, transform=ax1.transData)
+    # Legende: Seitenverhältnisse
+    patches = [mpatches.Patch(color=color_map[a], label=a) for a in all_aspects]
+    ax1.legend(handles=patches, title="Seitenverhältnis",
+               facecolor="#333", edgecolor="#555", labelcolor="white",
+               title_color="white", fontsize=8, loc="upper right")
+    legend1 = ax1.get_legend()
+    if legend1:
+        ax1.get_legend().get_title().set_color("white")
 
     # ── Subplot 2: Zeitaufschlüsselung ────────────────────────────────────────
-    ax2 = axes[1]
-    ax2.set_facecolor("#2a2a2a")
+    for gi, (gname, entries) in enumerate(grouped.items()):
+        n = len(entries)
+        offsets = np.linspace(-(n - 1) / 2, (n - 1) / 2, n) * bar_w
 
-    b_cap = ax2.bar(x, capture_ms,  width=bar_w, label="Kamera (capture)",
-                    color="#81c784", edgecolor="#43a047", linewidth=0.8)
-    b_pro = ax2.bar(x, process_ms, width=bar_w, bottom=capture_ms,
-                    label="Verarbeitung (HSV + Morphologie)",
-                    color="#e57373", edgecolor="#c62828", linewidth=0.8)
+        for entry, offset in zip(entries, offsets):
+            color = color_map.get(entry["aspect"], "#aaa")
+            # Capture-Teil (dunklere Variante der Farbe)
+            ax2.bar(gi + offset, entry["capture_ms"], width=bar_w * 0.88,
+                    color=color, edgecolor="#111", linewidth=0.6, alpha=0.6,
+                    label=None)
+            # Prozess-Teil (volle Farbe oben drauf)
+            ax2.bar(gi + offset, entry["process_ms"], width=bar_w * 0.88,
+                    bottom=entry["capture_ms"],
+                    color=color, edgecolor="#111", linewidth=0.6,
+                    label=None)
+            # Auflösungs-Label
+            ax2.text(
+                gi + offset, -1.5,
+                entry["label"],
+                ha="center", va="top", color="#aaa", fontsize=7, rotation=45
+            )
 
-    # Gesamtzeit und FPS über dem Stapel
-    for xi, cap, proc, fps in zip(x, capture_ms, process_ms, fps_vals):
-        total = cap + proc
-        ax2.text(xi, total + 0.5, f"{fps:.1f} FPS",
-                 ha="center", va="bottom", color="white", fontsize=9)
+    # Legende für Capture vs. Verarbeitung
+    p_cap  = mpatches.Patch(color="#aaa", alpha=0.5, label="Capture (Kamera-Puffer)")
+    p_proc = mpatches.Patch(color="#aaa",              label="Verarbeitung (HSV+Morphologie)")
+    ax2.legend(handles=[p_cap, p_proc],
+               facecolor="#333", edgecolor="#555", labelcolor="white",
+               fontsize=8, loc="upper left")
 
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(labels, color="white", fontsize=10)
+    ax2.set_xticks(x_centers)
+    ax2.set_xticklabels(group_labels, color="white", fontsize=10)
     ax2.set_ylabel("Zeit pro Frame (ms)", color="white", fontsize=11)
-    ax2.set_title("Zeitaufschlüsselung: Capture vs. Verarbeitung", color="#bbbbbb", fontsize=11)
-    ax2.tick_params(colors="white")
-    ax2.spines[:].set_color("#555")
-    ax2.grid(axis="y", color="#444", linestyle=":", linewidth=0.7)
-    ax2.legend(facecolor="#333", edgecolor="#555", labelcolor="white", fontsize=9,
-               loc="upper left")
+    ax2.set_title("Zeitaufschlüsselung: Kamera-Puffer vs. Verarbeitung",
+                  color="#bbbbbb", fontsize=11)
+    ax2.set_xlim(-0.6, n_groups - 0.4)
+    ax2.set_ylim(-5, None)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.subplots_adjust(hspace=0.45)
 
-    # Speichern
     out = Path(output_path)
     plt.savefig(out, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
     print(f"✅ Diagramm gespeichert: {out.resolve()}")
@@ -149,15 +211,21 @@ def make_chart(results: list, output_path: str, show: bool):
 
 
 def main():
-    args = parse_args()
-    results = load_results(args.input)
+    args    = parse_args()
+    results, groups = load_data(args.input)
 
-    print(f"  {len(results)} Auflösungen geladen aus: {args.input}")
+    print(f"  {len(results)} Messungen geladen aus: {args.input}")
+    print()
+    current = None
     for r in results:
-        print(f"    {r['label']:<14}  {r['fps']:>6.1f} FPS  "
-              f"(capture {r['capture_ms']:.1f} ms  +  process {r['process_ms']:.1f} ms)")
+        if r["group"] != current:
+            current = r["group"]
+            print(f"  ── {current}")
+        print(f"     {r['label']:<12}  {r['aspect']:<12}  "
+              f"{r['fps']:>5.1f} FPS  "
+              f"(cap {r['capture_ms']:>5.1f} ms  +  proc {r['process_ms']:>5.1f} ms)")
 
-    make_chart(results, args.output, show=not args.no_show)
+    make_chart(results, groups, args.output, show=not args.no_show)
 
 
 if __name__ == "__main__":
