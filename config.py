@@ -77,7 +77,7 @@ KD = 0.10                          # Differenzialer Anteil (dämpft Überschwing
 #                       Analog zu ALIGN_ROTATE_SPD beim Knick-Ausrichten.
 STRIPE_ALIGN_TOL_DEG  = 12.0         # Phase-2-EINGANG  (Grad): dreht wenn Winkel > X°
 STRIPE_ALIGN_EXIT_DEG =  6.0         # Phase-2-AUSGANG  (Grad): fährt weiter wenn Winkel < X°
-STRIPE_ALIGN_TIMEOUT_S = 3.0         # Deadlock-Schutz: nach X Sek. Phase 2 abbrechen
+STRIPE_ALIGN_TIMEOUT_S = 1.5         # Deadlock-Schutz: nach X Sek. Phase 2 abbrechen
 STRIPE_ALIGN_SPD      =  0.18        # Drehgeschwindigkeit Phase 2 (0.0–1.0)
 
 # Nicht mehr benötigt (wurde durch auf-der-Stelle-Drehen ersetzt):

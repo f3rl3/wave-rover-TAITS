@@ -550,12 +550,14 @@ def main():
                     # Hysterese-Bereich [EXIT_DEG … TOL_DEG]: kein Zustandswechsel
 
                     # ── Timeout-Schutz (Deadlock 3: Endlosrotation) ──────────
+                    timeout_boost = False   # diesen Frame mit voller Geschwindigkeit fahren?
                     if aligning_stripe and (now - align_stripe_t) > STRIPE_ALIGN_TIMEOUT_S:
                         logger.warning(
-                            "Phase-2 Timeout nach %.1fs (Winkel %+.1f°) – erzwinge Weiterfahrt",
+                            "Phase-2 Timeout nach %.1fs (Winkel %+.1f°) – volle Fahrt",
                             STRIPE_ALIGN_TIMEOUT_S, stripe_angle
                         )
                         aligning_stripe = False
+                        timeout_boost   = True   # Phase 3 ignoriert speed_factor
 
                     # ── Phasen ausführen (Phase 1 hat Vorrang vor Phase 2) ───
                     if not result.in_dead_zone:
@@ -581,7 +583,8 @@ def main():
 
                     else:
                         # Phase 3: FOLGEN ────────────────────────────────────
-                        current_speed = base_speed * result.speed_factor
+                        # timeout_boost: Phase 2 wurde abgebrochen → volle Geschwindigkeit
+                        current_speed = base_speed if timeout_boost else base_speed * result.speed_factor
                         if result.is_sharp_bend:
                             logger.info(
                                 "⚠ Scharfer Knick erkannt (%.1f°, %s) – halte an",
