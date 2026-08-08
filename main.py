@@ -487,11 +487,14 @@ def main():
                 # läuft der Timer weiter. Nach STUCK_RESET_S kompletter Reset.
                 if now - last_forward_t > STUCK_RESET_S:
                     logger.warning(
-                        "Stuck-Reset: seit %.0fs keine Vorwärtsbewegung – Pathfinding neu",
-                        now - last_forward_t,
+                        "Stuck-Reset: seit %.0fs keine Vorwärtsbewegung – Ausrichtung neu "
+                        "(Fahrmodus bleibt: %s)",
+                        now - last_forward_t, follow_state,
                     )
-                    state               = State.FOLLOWING
-                    follow_state        = State.FOLLOWING
+                    # Nur Ausrichtungs-/Bewegungs-State zurücksetzen.
+                    # follow_state (FOLLOWING vs RETURNING) und red_cooldown_end_t
+                    # NICHT anfassen – sonst vergisst der Bot die rote Markierung!
+                    state               = follow_state   # bleibt FOLLOWING oder RETURNING
                     aligning_stripe     = False
                     align_stripe_t      = 0.0
                     timeout_boost_end_t = 0.0
