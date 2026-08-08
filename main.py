@@ -46,7 +46,9 @@ from config import (
     ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
     RED_STOP_WAIT_S, TURN_180_SPD, RED_COOLDOWN_S,
-    STRIPE_ALIGN_TOL_DEG, STRIPE_ALIGN_EXIT_DEG, STRIPE_ALIGN_TIMEOUT_S, STRIPE_ALIGN_SPD,
+    STRIPE_ALIGN_TOL_DEG, STRIPE_ALIGN_EXIT_DEG, STRIPE_ALIGN_TIMEOUT_S,
+    STRIPE_ALIGN_BOOST_S, STRIPE_ALIGN_SPD,
+    STUCK_RESET_S,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
     DEBUG_WEB_SERVER, DEBUG_SERVER_PORT, DEBUG_STREAM_FPS,
 )
@@ -253,9 +255,11 @@ def main():
     search_dir     = SEARCH_DIRECTION
     show_mask      = DEBUG_SHOW_MASK
     show_red_mask  = False   # R-Taste: Rot-Maske im separaten Fenster anzeigen
-    prev_error      = 0.0
-    aligning_stripe = False   # True während Phase-2-Rotation (Hysterese-Flag)
-    align_stripe_t  = 0.0     # Zeitpunkt: aktuelle Phase-2-Episode begann
+    prev_error          = 0.0
+    aligning_stripe     = False   # True während Phase-2-Rotation (Hysterese-Flag)
+    align_stripe_t      = 0.0     # Zeitpunkt: aktuelle Phase-2-Episode begann
+    timeout_boost_end_t = 0.0     # Zeitpunkt bis wann nach Phase-2-Timeout Vollgas gilt
+    last_forward_t      = time.time()  # Letztes Mal vorwärts gefahren (Stuck-Erkennung)
 
     last_seen_t    = time.time()    # Zeitpunkt: Pfad zuletzt gesehen
     align_start_t  = 0.0            # Zeitpunkt: Ausrichtung begonnen
@@ -476,7 +480,27 @@ def main():
 
             elif state in (State.FOLLOWING, State.RETURNING):
                 # ── FOLLOWING / RETURNING: Pfad folgen ───────────────────────
-                #
+
+                # ── Stuck-Erkennung: kein Vorwärts seit STUCK_RESET_S → Reset ─
+                # last_forward_t wird in Phase 1 + Phase 3 auf `now` gesetzt.
+                # Wenn der Rover nur dreht/steht (Phase 2, ALIGNING, kein Pfad)
+                # läuft der Timer weiter. Nach STUCK_RESET_S kompletter Reset.
+                if now - last_forward_t > STUCK_RESET_S:
+                    logger.warning(
+                        "Stuck-Reset: seit %.0fs keine Vorwärtsbewegung – Pathfinding neu",
+                        now - last_forward_t,
+                    )
+                    state               = State.FOLLOWING
+                    follow_state        = State.FOLLOWING
+                    aligning_stripe     = False
+                    align_stripe_t      = 0.0
+                    timeout_boost_end_t = 0.0
+                    prev_error          = 0.0
+                    last_forward_t      = now
+                    heading.reset()
+                    rover.stop()
+                    continue
+
                 # Rote Markierung auslösen:
                 #   FOLLOWING  → erste rote Markierung  → RED_STOP
                 #   RETURNING  → zweite rote Markierung → TERMINAL
@@ -550,14 +574,13 @@ def main():
                     # Hysterese-Bereich [EXIT_DEG … TOL_DEG]: kein Zustandswechsel
 
                     # ── Timeout-Schutz (Deadlock 3: Endlosrotation) ──────────
-                    timeout_boost = False   # diesen Frame mit voller Geschwindigkeit fahren?
                     if aligning_stripe and (now - align_stripe_t) > STRIPE_ALIGN_TIMEOUT_S:
                         logger.warning(
-                            "Phase-2 Timeout nach %.1fs (Winkel %+.1f°) – volle Fahrt",
-                            STRIPE_ALIGN_TIMEOUT_S, stripe_angle
+                            "Phase-2 Timeout nach %.1fs (Winkel %+.1f°) – %.1fs Vollgas",
+                            STRIPE_ALIGN_TIMEOUT_S, stripe_angle, STRIPE_ALIGN_BOOST_S
                         )
-                        aligning_stripe = False
-                        timeout_boost   = True   # Phase 3 ignoriert speed_factor
+                        aligning_stripe     = False
+                        timeout_boost_end_t = now + STRIPE_ALIGN_BOOST_S
 
                     # ── Phasen ausführen (Phase 1 hat Vorrang vor Phase 2) ───
                     if not result.in_dead_zone:
@@ -571,8 +594,9 @@ def main():
                             kp=KP, kd=KD,
                             prev_error=prev_error,
                         )
-                        prev_error = result.offset_normalized
-                        hud_extra  = f"Annähern  off={result.offset_normalized:+.2f}"
+                        prev_error     = result.offset_normalized
+                        last_forward_t = now
+                        hud_extra      = f"Annähern  off={result.offset_normalized:+.2f}"
 
                     elif aligning_stripe:
                         # Phase 2: AUSRICHTEN ────────────────────────────────
@@ -583,8 +607,9 @@ def main():
 
                     else:
                         # Phase 3: FOLGEN ────────────────────────────────────
-                        # timeout_boost: Phase 2 wurde abgebrochen → volle Geschwindigkeit
-                        current_speed = base_speed if timeout_boost else base_speed * result.speed_factor
+                        # Vollgas-Boost nach Phase-2-Timeout (STRIPE_ALIGN_BOOST_S Sek.)
+                        boost_active  = now < timeout_boost_end_t
+                        current_speed = base_speed if boost_active else base_speed * result.speed_factor
                         if result.is_sharp_bend:
                             logger.info(
                                 "⚠ Scharfer Knick erkannt (%.1f°, %s) – halte an",
@@ -603,10 +628,12 @@ def main():
                                 kp=KP, kd=KD,
                                 prev_error=prev_error,
                             )
-                            prev_error = result.offset_normalized
-                            hud_extra  = (
+                            prev_error     = result.offset_normalized
+                            last_forward_t = now
+                            hud_extra      = (
                                 f"Kurve {result.bend_angle_deg:.0f}°  off={result.offset_normalized:+.2f}"
-                                if result.speed_factor < 1.0 else ""
+                                if result.speed_factor < 1.0 else
+                                f"BOOST {timeout_boost_end_t - now:.1f}s" if boost_active else ""
                             )
 
                     if DEBUG_PRINT_SPEED:
