@@ -71,12 +71,14 @@ KD = 0.10                          # Differenzialer Anteil (dämpft Überschwing
 #             Rover stoppt Vorwärtsbewegung und dreht sich bis Streifen senkrecht steht.
 #   Phase 3 – FOLGEN     (Streifen mittig + ausgerichtet): normale Fahrt + Knick-Check.
 #
-# STRIPE_ALIGN_TOL_DEG: Toleranz – unter diesem Winkel gilt Streifen als „ausgerichtet".
-#                       12° = „senkrecht genug". Kleiner → Rover dreht mehr.
-# STRIPE_ALIGN_SPD:     Rotationsgeschwindigkeit beim Auf-der-Stelle-Drehen (Phase 2).
-#                       Analog zu ALIGN_ROTATE_SPD beim Knick-Ausrichten.
-STRIPE_ALIGN_TOL_DEG = 12.0
-STRIPE_ALIGN_SPD     = 0.18          # Drehgeschwindigkeit Phase 2 (0.0–1.0)
+# STRIPE_ALIGN_TOL_DEG:  Phase-2-EINGANG: Rover dreht sich auf der Stelle wenn Winkel > X°.
+# STRIPE_ALIGN_EXIT_DEG: Phase-2-AUSGANG: Rover fährt erst weiter wenn Winkel < X°.
+#   Hysterese: Eingang > Ausgang verhindert Pendeln an der Schwelle.
+#   Beispiel: Rover dreht wenn > 12°, hört erst auf wenn < 6° → keine Zickzack-Bewegung.
+# STRIPE_ALIGN_SPD:      Rotationsgeschwindigkeit beim Auf-der-Stelle-Drehen (Phase 2).
+STRIPE_ALIGN_TOL_DEG  = 12.0         # Phase-2-Eingang (Grad)
+STRIPE_ALIGN_EXIT_DEG =  6.0         # Phase-2-Ausgang (Grad) – strenger als Eingang!
+STRIPE_ALIGN_SPD      =  0.18        # Drehgeschwindigkeit Phase 2 (0.0–1.0)
 
 # Nicht mehr benötigt (wurde durch auf-der-Stelle-Drehen ersetzt):
 # STRIPE_ALIGN_KP      = 0.30
