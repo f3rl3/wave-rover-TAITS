@@ -1,36 +1,3 @@
-"""
-Grüner-Pfad-Erkenner mit OpenCV — Kamera zeigt nach UNTEN
-===========================================================
-Verarbeitet jeden Kameraframe (Vogelperspektive auf den Boden) und gibt zurück:
-  - Ob ein Pfad gefunden wurde
-  - Den horizontalen Offset des Pfades (Lenkkorrektur)
-  - Den Knickwinkel des Pfades in Grad
-  - Einen annotierten Debug-Frame
-
-Kamera-Geometrie (nach unten gerichtet):
-  ┌─────────────────────┐  y = 0%   (Frame-Oberkante)
-  │  FERN-Zone          │           → Pfad knapp VOR dem Rover
-  │  (Primär-Lenkung)   │           → wird für Offset-Berechnung genutzt
-  ├─────────────────────┤  y ≈ 20%
-  │  (Übergang)         │
-  ├─────────────────────┤  y ≈ 40%
-  │  NAH-Zone           │           → Pfad DIREKT unter dem Rover
-  │  (Referenz-Knick)   │           → wird für Knick-Berechnung genutzt
-  ├─────────────────────┤  y ≈ 75%
-  │  (bereits hinter    │
-  │   dem Rover)        │           → wird ignoriert (abgefahrener Pfad)
-  └─────────────────────┘  y = 90%  (ROI-Ende, konfigurierbar)
-
-Knick-Erkennung:
-  bend_angle = atan2(far_cx − near_cx,  vertikaler_abstand)
-  far_cx  = Schwerpunkt X der FERN-Zone  (voraus)
-  near_cx = Schwerpunkt X der NAH-Zone   (unter Rover)
-
-  → bend_angle > 0 : Pfad biegt nach RECHTS ab
-  → bend_angle < 0 : Pfad biegt nach LINKS ab
-  → bend_angle ≈ 0 : Pfad gerade voraus
-"""
-
 import cv2
 import math
 import numpy as np
@@ -50,72 +17,44 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# ── Rot-Erkennung ─────────────────────────────────────────────────────────────
-# Rot liegt im HSV-Farbraum an beiden Rändern (H ≈ 0–10 und H ≈ 165–180),
-# deshalb werden zwei Masken per bitwise_or kombiniert.
-#
-# Schwellenwerte bewusst STRENG gewählt um Falsch-Positive zu vermeiden:
-#   S ≥ 140 : schließt Brauntöne, Holzböden, Schatten aus (die haben S < 120)
-#   V ≥ 80  : schließt sehr dunkle Oberflächen aus
-#
-# Kalibrierung: Im Debug-Fenster 'R' drücken → Rot-Maske wird angezeigt.
-# Falls Maske zu leer: S schrittweise auf 120, 100 senken.
-# Falls Maske zu voll (Fehldetektionen): S auf 160+ erhöhen.
 _RED_LOW1  = np.array((  0, 140,  80), dtype=np.uint8)   # unteres Rot  (H nahe 0°)
 _RED_HIGH1 = np.array(( 10, 255, 255), dtype=np.uint8)
 _RED_LOW2  = np.array((165, 140,  80), dtype=np.uint8)   # oberes Rot   (H nahe 180°)
 _RED_HIGH2 = np.array((180, 255, 255), dtype=np.uint8)
 
-# Mindestfläche roter Pixel.
-# Bei 640×480 und ROI≈87% ≈ 267 K Pixel → 10 K = ~3.7 % des Bildes.
-# Ein A4-Blatt auf dem Boden belegt bei typischem Kameraabstand ≥ 15 K Pixel.
 MIN_RED_AREA = 10_000
 
-# ── Zonen-Konstanten (relativ zur ROI-Höhe) ───────────────────────────────────
-# FERN-Zone: oberste 20% des ROI = Pfad knapp vor dem Rover
 FAR_ZONE_END     = 0.20
-
-# NAH-Zone: mittlerer Streifen = Pfad direkt unter dem Rover
 NEAR_ZONE_START  = 0.40
 NEAR_ZONE_END    = 0.75
 
-
 @dataclass
 class PathResult:
-    """Ergebnis einer Pfaderkennung für einen Frame."""
     found: bool
 
-    # ── Offset (Lenkung) ──────────────────────────────────────────────────────
+    # --- Offset (Lenkung) ---
     offset_normalized: float = 0.0   # -1.0 (links) … 0.0 (Mitte) … +1.0 (rechts)
-    centroid_x: Optional[int] = None # Lenkursprung X (aus FERN-Zone oder Fallback)
-    centroid_y: Optional[int] = None # Y-Position (für Debug-Overlay)
-    area: float = 0.0                # Gesamtfläche grüner Pixel (ganzes ROI)
+    centroid_x: Optional[int] = None # Lenkursprung X
+    centroid_y: Optional[int] = None # Y-Position
+    area: float = 0.0                # Gesamtfläche grüner Pixel
     in_dead_zone: bool = False       # True wenn Offset vernachlässigbar klein
 
-    # ── Knick-Erkennung ───────────────────────────────────────────────────────
+    # --- Knick-Erkennung ---
     bend_angle_deg: float = 0.0      # Knickwinkel in Grad
     bend_direction: str = "none"     # "left", "right", "none"
-    near_cx: Optional[int] = None    # Schwerpunkt NAH-Zone (direkt unter Rover)
-    far_cx: Optional[int] = None     # Schwerpunkt FERN-Zone (knapp voraus)
+    near_cx: Optional[int] = None    # Schwerpunkt NAH-Zone
+    far_cx: Optional[int] = None     # Schwerpunkt FERN-Zone
     near_found: bool = False
     far_found: bool = False
 
-    # ── Abgeleitete Steuergrößen ──────────────────────────────────────────────
+    # --- Abgeleitete Steuergrößen ---
     is_sharp_bend: bool = False
-    speed_factor: float = 1.0        # 1.0 = volle Geschw., 0.0 = Stopp/Ausrichten
+    speed_factor: float = 1.0
 
-    # ── Streifen-Ausrichtungswinkel (fitLine) ─────────────────────────────────
-    # Winkel zwischen erkanntem Streifen und der Vertikalen (Fahrtrichtung).
-    #   0°  = Streifen senkrecht im Bild  → Rover korrekt ausgerichtet
-    #  +x°  = Streifen nach rechts geneigt → Rover muss rechts drehen
-    #  −x°  = Streifen nach links geneigt  → Rover muss links drehen
-    # Wird nur ausgewertet wenn Streifen lateral bereits in der Mitte ist.
+    # --- Streifen-Ausrichtungswinkel ---
     stripe_angle_deg: float = 0.0
 
-
 class PathDetector:
-    """Erkennt grünen Pfad bei nach-unten-gerichteter Kamera."""
-
     def __init__(self):
         self._lower = np.array(GREEN_HSV_LOW,  dtype=np.uint8)
         self._upper = np.array(GREEN_HSV_HIGH, dtype=np.uint8)
@@ -125,30 +64,21 @@ class PathDetector:
         self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         self._last_mask: Optional[np.ndarray] = None   # Cache: Maske des letzten Frames
 
-    # ── Öffentliche API ────────────────────────────────────────────────────────
+    # --- API ---
 
     def process(self, frame: np.ndarray) -> Tuple[PathResult, np.ndarray]:
-        """
-        Analysiert einen BGR-Frame (Kamera nach unten gerichtet).
-
-        Returns:
-            (PathResult, annotierter Debug-Frame)
-        """
         h, w = frame.shape[:2]
         self._update_roi(h, w)
 
         roi_h = self._roi_y_bottom - self._roi_y_top
         roi   = frame[self._roi_y_top:self._roi_y_bottom, :]
 
-        # Grün-Maske berechnen und cachen – get_last_mask() greift darauf zu,
-        # ohne die teure HSV-Konvertierung + Morphologie erneut auszuführen.
         hsv  = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self._lower, self._upper)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  self._kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self._kernel)
         self._last_mask = mask
 
-        # Offset (Lenkung) aus der FERN-Zone
         result = self._calc_offset(mask, w, roi_h)
 
         if result.found:
@@ -159,32 +89,14 @@ class PathDetector:
         return result, debug
 
     def get_last_mask(self) -> Optional[np.ndarray]:
-        """Gibt die Maske des zuletzt verarbeiteten Frames zurück – ohne Neuberechnung."""
         return self._last_mask
 
     def detect_red(self, frame: np.ndarray) -> Tuple[bool, int]:
-        """
-        Erkennt eine rote Stopp-Markierung im Frame (Kamera nach unten).
-
-        Rot liegt im HSV-Farbraum an beiden Enden der Hue-Achse (0–10° und
-        165–180°), daher werden zwei Masken kombiniert.  Gesucht wird nur im
-        ROI-Bereich (gleiche Region wie Grün-Erkennung), damit Objekte außerhalb
-        des Fahrbereichs ignoriert werden.
-
-        Returns:
-            (detected, area)
-            detected – True wenn rote Fläche ≥ MIN_RED_AREA
-            area     – Anzahl roter Pixel (für Debug-Ausgaben)
-        """
         h, w = frame.shape[:2]
         self._update_roi(h, w)
 
-        # Rot wird nur im UNTEREN Teil des Frames gesucht (RED_DETECT_Y_START).
-        # Kamera zeigt nach unten: y > 55 % = direkt unter / leicht hinter Rover.
-        # So hält der Rover erst an wenn er physisch AUF der Markierung steht,
-        # nicht schon wenn die Markierung am oberen Bildrand (= weit voraus) auftaucht.
         red_y_start = int(h * RED_DETECT_Y_START)
-        red_y_end   = self._roi_y_bottom          # bleibt ROI-Untergrenze (90 %)
+        red_y_end   = self._roi_y_bottom
         roi = frame[red_y_start:red_y_end, :]
 
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -199,40 +111,26 @@ class PathDetector:
         return area >= MIN_RED_AREA, area
 
     def get_last_red_mask(self) -> Optional[np.ndarray]:
-        """Gibt die Rot-Maske des letzten detect_red()-Aufrufs zurück (für Debug)."""
         return getattr(self, "_last_red_mask", None)
 
     def update_hsv_range(self, low: tuple, high: tuple):
         self._lower = np.array(low,  dtype=np.uint8)
         self._upper = np.array(high, dtype=np.uint8)
 
-    # ── Interne Berechnungen ───────────────────────────────────────────────────
+    # --- Interne Berechnungen ---
 
     def _calc_stripe_angle(self, mask: np.ndarray) -> float:
-        """
-        Berechnet den Winkel des Streifens zur Vertikalen via cv2.fitLine().
-
-          0°  → Streifen senkrecht (Rover ausgerichtet)
-         +x°  → Streifen nach rechts geneigt  → Rover dreht rechts
-         −x°  → Streifen nach links geneigt   → Rover dreht links
-
-        Vorzeichen-Konvention identisch zu offset_normalized:
-          positive Werte = Korrektur nach rechts nötig.
-        """
         ys, xs = np.where(mask > 0)
         if len(xs) < 30:
             return 0.0
 
         pts = np.column_stack([xs, ys]).astype(np.float32).reshape(-1, 1, 2)
-        # .flatten(): fitLine gibt je nach OpenCV-Version (4,) oder (4,1) zurück
         out = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).flatten()
         vx, vy = float(out[0]), float(out[1])
 
-        # Richtungsvektor soll nach "oben" im Bild zeigen (= Pfad voraus, vy < 0)
         if vy > 0:
             vx, vy = -vx, -vy
 
-        # Winkel zur Vertikalen: 0° = senkrecht, +90° = waagrecht nach rechts
         return math.degrees(math.atan2(vx, -vy))
 
     def _update_roi(self, h: int, w: int):
@@ -249,36 +147,26 @@ class PathDetector:
             )
 
     def _calc_offset(self, mask: np.ndarray, frame_w: int, roi_h: int) -> PathResult:
-        """
-        Berechnet den Lenk-Offset primär aus der FERN-Zone (Pfad voraus).
-
-        Fallback auf gesamtes ROI wenn FERN-Zone zu wenig Pixel hat
-        (z.B. beim Einfahren auf den Pfad).
-        """
-        # Gesamtfläche aus dem vollen ROI
         M_full = cv2.moments(mask)
         area   = M_full["m00"]
 
         if area < MIN_GREEN_AREA:
             return PathResult(found=False, area=area)
 
-        # Primär: FERN-Zone (oben = Pfad voraus)
         far_end  = int(roi_h * FAR_ZONE_END)
         far_mask = mask[:far_end, :]
         M_far    = cv2.moments(far_mask)
 
         if M_far["m00"] >= MIN_GREEN_AREA * 0.25:
-            # FERN-Zone hat genug Pixel → daraus lenken
             cx = int(M_far["m10"] / M_far["m00"])
-            cy = int(M_far["m01"] / M_far["m00"])          # ROI-relativ
+            cy = int(M_far["m01"] / M_far["m00"])
         else:
-            # Fallback: gesamter ROI-Schwerpunkt
             cx = int(M_full["m10"] / area)
             cy = int(M_full["m01"] / area)
 
         center_x     = frame_w / 2.0
         offset_px    = cx - center_x
-        offset_norm  = offset_px / center_x               # -1.0 … +1.0
+        offset_norm  = offset_px / center_x 
         in_dead_zone = abs(offset_px) < self._dead_zone_px
 
         return PathResult(
@@ -292,12 +180,6 @@ class PathDetector:
 
     def _calc_bend(self, mask: np.ndarray, result: PathResult,
                    frame_w: int, roi_h: int):
-        """
-        Vergleicht FERN-Zone (voraus) mit NAH-Zone (unter Rover) → Knickwinkel.
-
-        NAH-Zone ist bei der nach-unten-Kamera der MITTLERE Streifen des Frames
-        (direkt unter dem Rover), nicht der untere Rand.
-        """
         far_end    = int(roi_h * FAR_ZONE_END)
         near_start = int(roi_h * NEAR_ZONE_START)
         near_end   = int(roi_h * NEAR_ZONE_END)
@@ -350,8 +232,7 @@ class PathDetector:
             result.speed_factor  = 1.0 - ratio * (1.0 - SPEED_MIN_FACTOR)
             result.is_sharp_bend = False
 
-    # ── Debug-Overlay ──────────────────────────────────────────────────────────
-
+    # --- Debug-Overlay ---
     def _draw_overlay(self, frame: np.ndarray, mask: np.ndarray,
                       result: PathResult, w: int, h: int, roi_h: int) -> np.ndarray:
         """Zeichnet alle Debug-Overlays (angepasst für nach-unten-Kamera)."""
@@ -380,17 +261,17 @@ class PathDetector:
         near_top_y  = rt + int(roi_h * NEAR_ZONE_START)
         near_bot_y  = rt + int(roi_h * NEAR_ZONE_END)
 
-        # FERN-Zone (oben = voraus) – blaue Linie
+        # FERN-Zone
         cv2.line(frame, (0, far_y), (w, far_y), (255, 80, 80), 1)
         cv2.putText(frame, "FERN (voraus)", (5, far_y - 4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 80, 80), 1)
 
-        # NAH-Zone (Mitte = unter Rover) – oranges Rechteck
+        # NAH-Zone
         cv2.rectangle(frame, (0, near_top_y), (w, near_bot_y), (50, 160, 220), 1)
         cv2.putText(frame, "NAH (unter Rover)", (5, near_top_y + 13),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.38, (50, 160, 220), 1)
 
-        # Fahrtrichtungs-Pfeil (oben = vorwärts)
+        # Fahrtrichtungs-Pfeil
         arr_x = w - 22
         cv2.arrowedLine(frame, (arr_x, rb - 10), (arr_x, rt + 10),
                         (180, 180, 180), 1, tipLength=0.15)
@@ -398,11 +279,11 @@ class PathDetector:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 180), 1)
 
         if result.found:
-            # Lenkursprung (aus FERN-Zone)
+            # Lenkursprung
             cv2.drawMarker(frame, (result.centroid_x, result.centroid_y),
                            (0, 255, 255), cv2.MARKER_CROSS, 22, 2)
 
-            # NAH/FERN Schwerpunkte + Pfeil (Knick-Richtung)
+            # NAH/FERN Schwerpunkte + Pfeil
             if result.near_cx is not None and result.far_cx is not None:
                 near_cy = (near_top_y + near_bot_y) // 2
                 far_cy  = rt + int(roi_h * FAR_ZONE_END) // 2
@@ -411,13 +292,12 @@ class PathDetector:
                 cv2.circle(frame, (result.far_cx,  far_cy),  7, (255, 80,  80), -1)  # rot  = FERN
 
                 bend_col = (0, 255, 0) if not result.is_sharp_bend else (0, 0, 255)
-                # Pfeil von NAH → FERN zeigt die Pfadrichtung
                 cv2.arrowedLine(frame,
                                 (result.near_cx, near_cy),
                                 (result.far_cx,  far_cy),
                                 bend_col, 2, tipLength=0.2)
 
-            # ── Texte ──────────────────────────────────────────────────────────
+            # --- Texte ---
             off_pct = result.offset_normalized * 100
             sf      = result.speed_factor
 
@@ -438,10 +318,7 @@ class PathDetector:
             cv2.putText(frame, btxt, (10, 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.62, bcol, 2)
 
-            # ── Streifen-Ausrichtungslinie ─────────────────────────────────────
-            # Zeigt die per fitLine berechnete Orientierung des Streifens.
-            # Cyan  = ausgerichtet (Winkelkorrektur inaktiv – Streifen zu weit weg)
-            # Gelb  = Streifen mittig, Winkel wird korrigiert
+            # --- Streifen-Ausrichtungslinie ---
             angle     = result.stripe_angle_deg
             angle_rad = math.radians(angle)
             lx = math.sin(angle_rad)

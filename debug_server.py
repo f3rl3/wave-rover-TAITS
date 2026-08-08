@@ -1,14 +1,7 @@
 """
 Web-Debug-Server für den Wave Rover
 =====================================
-Startet einen Flask-Webserver im Hintergrund.
-Im Browser öffnen:  http://192.168.4.1:5000
-
-Bietet:
-  /              → Live-Dashboard mit allen Infos
-  /stream/main   → MJPEG-Stream: Kamerabild mit Overlays
-  /stream/mask   → MJPEG-Stream: Grün-Erkennungsmaske
-  /status        → JSON: aktueller Zustand (für Dashboard)
+aufrufbar unter: http://192.168.4.1:5000
 """
 
 import io
@@ -28,7 +21,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# ── HTML-Dashboard ─────────────────────────────────────────────────────────────
+# --- HTML-Dashboard ---
 _HTML = r"""
 <!DOCTYPE html>
 <html lang="de">
@@ -258,12 +251,7 @@ poll();
 </html>
 """
 
-
-# ── Thread-sicherer Frame-Puffer ──────────────────────────────────────────────
-
 class _FrameBuffer:
-    """Hält immer den neuesten Frame – ältere werden überschrieben."""
-
     def __init__(self):
         self._frame: Optional[np.ndarray] = None
         self._lock  = threading.Lock()
@@ -275,14 +263,10 @@ class _FrameBuffer:
         self._event.set()
 
     def get(self, timeout: float = 1.0) -> Optional[np.ndarray]:
-        """Wartet auf neuen Frame (blockierend bis timeout)."""
         self._event.wait(timeout=timeout)
         self._event.clear()
         with self._lock:
             return self._frame.copy() if self._frame is not None else None
-
-
-# ── Status-Puffer ─────────────────────────────────────────────────────────────
 
 class _StatusBuffer:
     def __init__(self):
@@ -297,26 +281,14 @@ class _StatusBuffer:
         with self._lock:
             return dict(self._data)
 
-
-# ── Debug-Server ──────────────────────────────────────────────────────────────
-
 class DebugServer:
-    """
-    Startet einen Flask-Webserver im Hintergrund-Thread.
-
-    Verwendung in main.py:
-        srv = DebugServer(port=5000, stream_fps=15)
-        srv.start()
-        # Im Loop:
-        srv.push(main_frame, mask_frame, status_dict)
-    """
-
     def __init__(self, port: int = 5000, stream_fps: int = 15):
         if not _FLASK_OK:
             raise ImportError(
                 "Flask nicht installiert. "
                 "Installieren mit:  pip install flask"
             )
+        
         self._port       = port
         self._min_dt     = 1.0 / max(stream_fps, 1)
         self._buf_main   = _FrameBuffer()
@@ -325,10 +297,8 @@ class DebugServer:
         self._app        = self._build_app()
         self._thread: Optional[threading.Thread] = None
 
-    # ── Öffentliche API ───────────────────────────────────────────────────────
-
+    # --- API ---
     def start(self):
-        """Startet den Server in einem Daemon-Thread (stoppt mit dem Hauptprozess)."""
         if self._thread and self._thread.is_alive():
             return
         self._thread = threading.Thread(
@@ -336,41 +306,29 @@ class DebugServer:
         )
         self._thread.start()
         logger.info(
-            "🌐 Debug-Dashboard erreichbar unter  http://<rover-ip>:%d", self._port
+            "Debug-Dashboard erreichbar unter  http://<rover-ip>:%d", self._port
         )
 
     def push(self,
              main_frame: np.ndarray,
              mask_frame: np.ndarray,
              status: Dict[str, Any]):
-        """
-        Frames und Zustand aktualisieren.
-        Wird jeden Kamera-Frame aus dem Hauptloop aufgerufen.
-
-        Args:
-            main_frame: BGR-Frame mit Overlays (von PathDetector)
-            mask_frame: Grau-Maske (von detector.get_mask_only())
-            status:     Dict mit aktuellen Zustandswerten
-        """
         self._buf_main.push(main_frame)
 
-        # Maske: in BGR konvertieren damit der Browser sie anzeigen kann
         if len(mask_frame.shape) == 2:
             mask_bgr = cv2.cvtColor(mask_frame, cv2.COLOR_GRAY2BGR)
         else:
             mask_bgr = mask_frame
-        # Grüne Pixel hervorheben
+
         colored = np.zeros_like(mask_bgr)
         colored[mask_frame > 0] = (0, 220, 80)
         self._buf_mask.push(colored)
 
         self._status.push(status)
 
-    # ── Flask-App aufbauen ────────────────────────────────────────────────────
-
+    # --- Flask-App aufbauen ---
     def _build_app(self) -> Flask:
         app = Flask(__name__)
-        # Logging von Flask/Werkzeug unterdrücken
         import logging as _lg
         _lg.getLogger("werkzeug").setLevel(_lg.ERROR)
 
@@ -398,8 +356,7 @@ class DebugServer:
 
         return app
 
-    # ── MJPEG-Generator ───────────────────────────────────────────────────────
-
+    # --- MJPEG-Generator ---
     def _mjpeg_generator(self, buf: _FrameBuffer):
         """Generator der JPEG-Frames als MJPEG-Stream liefert."""
         last_t = 0.0
@@ -407,7 +364,6 @@ class DebugServer:
 
         while True:
             now = time.time()
-            # FPS-Limit einhalten
             if now - last_t < self._min_dt:
                 time.sleep(0.005)
                 continue
@@ -437,8 +393,7 @@ class DebugServer:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 100), 1)
         return img
 
-    # ── Server-Thread ─────────────────────────────────────────────────────────
-
+    # --- Server-Thread ---
     def _run(self):
         self._app.run(
             host="0.0.0.0",
