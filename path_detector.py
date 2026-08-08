@@ -104,14 +104,6 @@ class PathResult:
     is_sharp_bend: bool = False
     speed_factor: float = 1.0        # 1.0 = volle Geschw., 0.0 = Stopp/Ausrichten
 
-    # ── Streifen-Ausrichtungswinkel ───────────────────────────────────────────
-    # Winkel zwischen dem erkannten Streifen und der Vertikalen (Fahrtrichtung).
-    #   0°   = Streifen senkrecht zum Bildrand = Rover korrekt ausgerichtet
-    #  +30°  = Streifen nach rechts geneigt    = Rover muss rechts drehen
-    #  -30°  = Streifen nach links geneigt     = Rover muss links drehen
-    #  ±90°  = Streifen waagrecht              = Rover fährt quer/parallel zum Pfad
-    stripe_angle_deg: float = 0.0
-
 
 class PathDetector:
     """Erkennt grünen Pfad bei nach-unten-gerichteter Kamera."""
@@ -153,7 +145,6 @@ class PathDetector:
 
         if result.found:
             self._calc_bend(mask, result, w, roi_h)
-            result.stripe_angle_deg = self._calc_stripe_angle(mask)
 
         debug = self._draw_overlay(frame.copy(), mask, result, w, h, roi_h)
         return result, debug
@@ -207,37 +198,6 @@ class PathDetector:
         self._upper = np.array(high, dtype=np.uint8)
 
     # ── Interne Berechnungen ───────────────────────────────────────────────────
-
-    def _calc_stripe_angle(self, mask: np.ndarray) -> float:
-        """
-        Berechnet den Winkel des Streifens zur Vertikalen mittels cv2.fitLine().
-
-        Rückgabe: Winkel in Grad
-          0°   → Streifen senkrecht (Rover ausgerichtet)
-          +90° → Streifen waagrecht nach rechts geneigt
-          -90° → Streifen waagrecht nach links geneigt
-
-        Geometrie (Kamera nach unten, Y wächst nach unten im Bild):
-          Richtungsvektor (vx, vy): vx=0, vy<0 → senkrecht nach oben (Pfad voraus)
-          Winkel = atan2(vx, -vy): 0° bei vx=0, +90° wenn Streifen nach rechts kippt.
-        """
-        ys, xs = np.where(mask > 0)
-        if len(xs) < 30:          # zu wenig Pixel → kein stabiles Ergebnis
-            return 0.0
-
-        pts = np.column_stack([xs, ys]).astype(np.float32).reshape(-1, 1, 2)
-        output = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01)
-        vx, vy = float(output[0]), float(output[1])
-
-        # fitLine liefert keine eindeutige Richtung – normalisieren:
-        # Richtungsvektor soll nach "oben" im Bild zeigen (vy < 0 = Pfad voraus).
-        if vy > 0:
-            vx, vy = -vx, -vy
-
-        # Winkel zwischen Richtungsvektor und Vertikaler (0, -1)
-        # +Winkel → Spitze kippt nach rechts → Rover dreht rechts
-        # −Winkel → Spitze kippt nach links  → Rover dreht links
-        return math.degrees(math.atan2(vx, -vy))
 
     def _update_roi(self, h: int, w: int):
         new_top    = int(h * ROI_TOP_RATIO)
@@ -411,37 +371,15 @@ class PathDetector:
                 near_cy = (near_top_y + near_bot_y) // 2
                 far_cy  = rt + int(roi_h * FAR_ZONE_END) // 2
 
-                cv2.circle(frame, (result.near_cx, near_cy), 7, (50, 200, 255), -1)
-                cv2.circle(frame, (result.far_cx,  far_cy),  7, (255, 80,  80), -1)
+                cv2.circle(frame, (result.near_cx, near_cy), 7, (50, 200, 255), -1)  # blau = NAH
+                cv2.circle(frame, (result.far_cx,  far_cy),  7, (255, 80,  80), -1)  # rot  = FERN
 
                 bend_col = (0, 255, 0) if not result.is_sharp_bend else (0, 0, 255)
+                # Pfeil von NAH → FERN zeigt die Pfadrichtung
                 cv2.arrowedLine(frame,
                                 (result.near_cx, near_cy),
                                 (result.far_cx,  far_cy),
                                 bend_col, 2, tipLength=0.2)
-
-            # ── Streifen-Ausrichtungslinie (fitLine-Ergebnis) ──────────────────
-            # Zeigt die berechnete Orientierung des Streifens.
-            # Cyan  = gut ausgerichtet (|angle| < 12°)
-            # Orange = Ausrichtungsfehler – Winkelkorrektur aktiv
-            angle = result.stripe_angle_deg
-            angle_rad = math.radians(angle)
-            line_vx =  math.sin(angle_rad)     # Richtungsvektor aus dem Winkel
-            line_vy = -math.cos(angle_rad)      # negativ = nach oben im Bild
-            cx_l = result.centroid_x if result.centroid_x else w // 2
-            cy_l = (rt + rb) // 2
-            arm  = roi_h // 2 - 5
-            x1 = int(cx_l - line_vx * arm)
-            y1 = int(cy_l - line_vy * arm)
-            x2 = int(cx_l + line_vx * arm)
-            y2 = int(cy_l + line_vy * arm)
-            from config import STRIPE_ALIGN_TOL_DEG
-            line_col = (0, 255, 200) if abs(angle) <= STRIPE_ALIGN_TOL_DEG else (0, 140, 255)
-            cv2.line(frame, (x1, y1), (x2, y2), line_col, 2, cv2.LINE_AA)
-            # Winkel-Label
-            atxt = f"{angle:+.0f}deg"
-            cv2.putText(frame, atxt, (cx_l + 8, cy_l - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, line_col, 1)
 
             # ── Texte ──────────────────────────────────────────────────────────
             off_pct = result.offset_normalized * 100

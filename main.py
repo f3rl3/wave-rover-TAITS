@@ -46,7 +46,6 @@ from config import (
     ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
     RED_STOP_WAIT_S, TURN_180_SPD, RED_COOLDOWN_S,
-    STRIPE_ALIGN_KP, STRIPE_ALIGN_TOL_DEG,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
     DEBUG_WEB_SERVER, DEBUG_SERVER_PORT, DEBUG_STREAM_FPS,
 )
@@ -533,54 +532,27 @@ def main():
                     else:
                         # Geschwindigkeit anpassen: langsamer bei Kurve
                         current_speed = base_speed * result.speed_factor
+                        prev_error    = result.offset_normalized
 
-                        # ── Kombinierter Lenkfehler: lateral + Winkelausrichtung ──
-                        # Problem: Rover kann parallel zum Streifen fahren wenn nur
-                        # der X-Versatz des Schwerpunkts korrigiert wird.
-                        # Lösung: fitLine() liefert den Winkel des Streifens zur
-                        # Vertikalen. Dieser wird als zweiter Fehlerterm addiert,
-                        # sodass sich der Rover gleichzeitig dreht UND vorwärts fährt.
-                        #
-                        # Vorzeichen-Konvention (wie offset_normalized):
-                        #   + → Rover muss rechts drehen
-                        #   − → Rover muss links drehen
-                        #
-                        # stripe_angle_deg > 0 = Streifen nach rechts geneigt
-                        #   → Rover zeigt etwas zu weit links → rechts drehen (+)
-                        stripe_angle  = result.stripe_angle_deg
-                        angular_err   = 0.0
-                        if abs(stripe_angle) > STRIPE_ALIGN_TOL_DEG:
-                            # Normieren auf -1..+1, dann mit eigenem Gain skalieren.
-                            # Division durch KP damit der steer()-Aufruf (der mit KP
-                            # multipliziert) den richtigen Endwert STRIPE_ALIGN_KP liefert.
-                            angular_err = (stripe_angle / 90.0) * (STRIPE_ALIGN_KP / KP)
-
-                        steering_err = result.offset_normalized + angular_err
-                        steering_err = max(-1.0, min(1.0, steering_err))
-                        prev_error   = result.offset_normalized   # D-Anteil bleibt lateral
-
-                        if result.in_dead_zone and abs(stripe_angle) <= STRIPE_ALIGN_TOL_DEG:
-                            # Streifen mittig UND senkrecht → geradeaus
+                        if result.in_dead_zone:
                             rover.forward(current_speed)
                         else:
                             rover.steer(
                                 current_speed,
-                                steering_err,
+                                result.offset_normalized,
                                 turn_max=SPEED_TURN_MAX,
                                 kp=KP, kd=KD,
                                 prev_error=prev_error,
                             )
 
-                        if abs(stripe_angle) > STRIPE_ALIGN_TOL_DEG:
-                            hud_extra = f"Streifenwinkel {stripe_angle:+.0f}°"
-                        elif result.speed_factor < 1.0:
+                        if result.speed_factor < 1.0:
                             hud_extra = f"Kurve {result.bend_angle_deg:.0f}° → speed x{result.speed_factor:.2f}"
 
                         if DEBUG_PRINT_SPEED:
                             logger.debug(
-                                "FOLLOW  off=%+.3f  stripe=%+.1f°  bend=%.1f°  sf=%.2f  spd=%.2f",
-                                result.offset_normalized, stripe_angle,
-                                result.bend_angle_deg, result.speed_factor, current_speed
+                                "FOLLOW  off=%+.3f  winkel=%.1f°  sf=%.2f  spd=%.2f",
+                                result.offset_normalized, result.bend_angle_deg,
+                                result.speed_factor, current_speed
                             )
 
             # ── FPS ───────────────────────────────────────────────────────────
@@ -600,7 +572,6 @@ def main():
                         "eff_speed":    round(current_speed, 3),
                         "path_found":   result.found,
                         "offset":       round(result.offset_normalized, 4) if result.found else 0.0,
-                        "stripe_angle": round(result.stripe_angle_deg, 1) if result.found else 0.0,
                         "in_dead_zone": result.in_dead_zone,
                         "area":         round(result.area, 1),
                         "bend_angle":   round(result.bend_angle_deg, 2) if result.found else 0.0,
