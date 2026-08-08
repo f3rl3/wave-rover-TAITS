@@ -65,16 +65,22 @@ KP = 0.55                          # Proportionaler Anteil  (war 0.0025 → viel
 KD = 0.10                          # Differenzialer Anteil (dämpft Überschwingen)
 
 # ── Streifen-Ausrichtung (Winkelkorrektur) ────────────────────────────────────
-# Zwei-Phasen-Lenkung:
-#   Phase 1 – Streifen außerhalb Mitte: nur lateral korrigieren (auf Streifen zufahren).
-#   Phase 2 – Streifen in der Mitte (in_dead_zone): Winkelkorrektur aktiv werden lassen.
+# Drei-Phasen-Lenkung:
+#   Phase 1 – ANNÄHERN  (Streifen außerhalb Mitte): nur lateral lenken, vorwärts.
+#   Phase 2 – AUSRICHTEN (Streifen zentriert, Winkel zu groß): AUF DER STELLE drehen.
+#             Rover stoppt Vorwärtsbewegung und dreht sich bis Streifen senkrecht steht.
+#   Phase 3 – FOLGEN     (Streifen mittig + ausgerichtet): normale Fahrt + Knick-Check.
 #
-# STRIPE_ALIGN_KP:      Verstärkung der Winkelkorrektur (unabhängig von KP).
-#                       Kleiner = sanfter, größer = aggressiver. Startwert: 0.30
-# STRIPE_ALIGN_TOL_DEG: Toleranz – unter diesem Winkel keine Korrektur.
-#                       12° = „senkrecht genug". Kleiner → Rover zittert.
-STRIPE_ALIGN_KP      = 0.30
+# STRIPE_ALIGN_TOL_DEG: Toleranz – unter diesem Winkel gilt Streifen als „ausgerichtet".
+#                       12° = „senkrecht genug". Kleiner → Rover dreht mehr.
+# STRIPE_ALIGN_SPD:     Rotationsgeschwindigkeit beim Auf-der-Stelle-Drehen (Phase 2).
+#                       Analog zu ALIGN_ROTATE_SPD beim Knick-Ausrichten.
 STRIPE_ALIGN_TOL_DEG = 12.0
+STRIPE_ALIGN_SPD     = 0.18          # Drehgeschwindigkeit Phase 2 (0.0–1.0)
+
+# Nicht mehr benötigt (wurde durch auf-der-Stelle-Drehen ersetzt):
+# STRIPE_ALIGN_KP      = 0.30
+STRIPE_ALIGN_KP      = 0.30          # Rückwärtskompatibilität – wird in main.py nicht mehr verwendet
 
 # ── Knick-Erkennung & Geschwindigkeitsanpassung ──────────────────────────────
 # Der Knickwinkel wird aus dem Unterschied zwischen dem nahen und fernen

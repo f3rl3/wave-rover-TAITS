@@ -46,7 +46,7 @@ from config import (
     ALIGN_ROTATE_SPD, ALIGN_TIMEOUT_S,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
     RED_STOP_WAIT_S, TURN_180_SPD, RED_COOLDOWN_S,
-    STRIPE_ALIGN_KP, STRIPE_ALIGN_TOL_DEG,
+    STRIPE_ALIGN_TOL_DEG, STRIPE_ALIGN_SPD,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
     DEBUG_WEB_SERVER, DEBUG_SERVER_PORT, DEBUG_STREAM_FPS,
 )
@@ -518,57 +518,57 @@ def main():
                     if not result.in_dead_zone:
                         last_seen_side = "left" if result.offset_normalized < 0 else "right"
 
-                    # Scharfer Knick → ALIGNING starten
-                    if result.is_sharp_bend:
-                        logger.info(
-                            "⚠ Scharfer Knick erkannt (%.1f°, %s) – halte an und richte aus",
-                            result.bend_angle_deg, result.bend_direction
+                    # ── Drei-Phasen-Lenkung ──────────────────────────────────
+                    # Phase 1 – ANNÄHERN  (Streifen außerhalb Mitte):
+                    #   Lateral auf den Streifen zulenken. Rover fährt vorwärts.
+                    #   Kein Winkel, kein Knick-Check – erst ankommen, dann ausrichten.
+                    #
+                    # Phase 2 – AUSRICHTEN (Streifen mittig, aber Winkel zu groß):
+                    #   Rover stoppt Vorwärtsfahrt und dreht sich AUF DER STELLE.
+                    #   Bleibt in Phase 2 bis Streifen senkrecht steht (< STRIPE_ALIGN_TOL_DEG).
+                    #
+                    # Phase 3 – FOLGEN    (Streifen mittig + ausgerichtet):
+                    #   Normale Vorwärtsfahrt. Erst hier wird Knick-Erkennung geprüft.
+                    current_speed  = base_speed * result.speed_factor
+                    stripe_angle   = result.stripe_angle_deg
+                    stripe_aligned = abs(stripe_angle) <= STRIPE_ALIGN_TOL_DEG
+
+                    if not result.in_dead_zone:
+                        # ── Phase 1: ANNÄHERN ─────────────────────────────────
+                        rover.steer(
+                            current_speed,
+                            result.offset_normalized,
+                            turn_max=SPEED_TURN_MAX,
+                            kp=KP, kd=KD,
+                            prev_error=prev_error,
                         )
-                        state         = State.ALIGNING
-                        align_start_t = now
-                        align_dir     = result.bend_direction if result.bend_direction != "none" else "left"
-                        heading.reset()    # Aktuelle Richtung = Vorwärts
-                        rover.stop()
-                        # KEIN time.sleep() – blockiert den Kontrollloop!
+                        prev_error = result.offset_normalized
+                        hud_extra  = f"Annähern  off={result.offset_normalized:+.2f}"
+
+                    elif not stripe_aligned:
+                        # ── Phase 2: AUSRICHTEN ────────────────────────────────
+                        # Streifen ist mittig ABER Winkel falsch → auf der Stelle drehen.
+                        # Rover stoppt vorwärts – dreht sich bis Winkel < Toleranz.
+                        align_dir_now = "right" if stripe_angle > 0 else "left"
+                        rover.turn_in_place(STRIPE_ALIGN_SPD, direction=align_dir_now)
+                        prev_error = 0.0   # D-Anteil zurücksetzen (kein lateraler Fehler)
+                        hud_extra  = f"Ausrichten {stripe_angle:+.0f}° ({align_dir_now})"
+
                     else:
-                        # Geschwindigkeit anpassen: langsamer bei Kurve
-                        current_speed = base_speed * result.speed_factor
-                        stripe_angle  = result.stripe_angle_deg
-
-                        # ── Zwei-Phasen-Lenkung ───────────────────────────────
-                        # Phase 1 – Streifen außerhalb Mitte (not in_dead_zone):
-                        #   Nur lateral korrigieren. Rover fährt auf den Streifen zu.
-                        #   Winkelkorrektur ist DEAKTIVIERT – sonst dreht Rover schon
-                        #   parallel und prüft endlos ob er noch parallel ist.
-                        #
-                        # Phase 2 – Streifen in der Mitte (in_dead_zone):
-                        #   Lateraler Fehler ≈ 0. Jetzt Winkelkorrektur anwenden damit
-                        #   Streifen senkrecht zum Bildrand steht. Rover dreht leicht
-                        #   während er vorwärts fährt – kein Stopp nötig.
-
-                        if result.in_dead_zone:
-                            # Phase 2: Streifen zentriert – Winkel korrigieren
-                            angular_err = 0.0
-                            if abs(stripe_angle) > STRIPE_ALIGN_TOL_DEG:
-                                # Normiert auf -1..+1, skaliert mit eigenem Gain.
-                                # Division durch KP damit steer() (×KP) den richtigen
-                                # Endwert STRIPE_ALIGN_KP liefert.
-                                angular_err = (stripe_angle / 90.0) * (STRIPE_ALIGN_KP / KP)
-
-                            if abs(stripe_angle) <= STRIPE_ALIGN_TOL_DEG:
-                                rover.forward(current_speed)   # zentriert + ausgerichtet
-                                hud_extra = ""
-                            else:
-                                rover.steer(
-                                    current_speed,
-                                    angular_err,               # nur Winkel, kein Offset
-                                    turn_max=SPEED_TURN_MAX,
-                                    kp=KP, kd=KD,
-                                    prev_error=0.0,
-                                )
-                                hud_extra = f"Ausrichten {stripe_angle:+.0f}°"
+                        # ── Phase 3: FOLGEN ────────────────────────────────────
+                        # Streifen mittig UND ausgerichtet → normale Fahrt.
+                        # Erst hier Knick-Erkennung (ALIGNING) prüfen.
+                        if result.is_sharp_bend:
+                            logger.info(
+                                "⚠ Scharfer Knick erkannt (%.1f°, %s) – halte an und richte aus",
+                                result.bend_angle_deg, result.bend_direction
+                            )
+                            state         = State.ALIGNING
+                            align_start_t = now
+                            align_dir     = result.bend_direction if result.bend_direction != "none" else "left"
+                            heading.reset()
+                            rover.stop()
                         else:
-                            # Phase 1: Streifen seitlich – nur lateral, kein Winkel
                             rover.steer(
                                 current_speed,
                                 result.offset_normalized,
@@ -576,20 +576,24 @@ def main():
                                 kp=KP, kd=KD,
                                 prev_error=prev_error,
                             )
-                            hud_extra = f"Annähern  off={result.offset_normalized:+.2f}"
+                            prev_error = result.offset_normalized
+                            if result.speed_factor < 1.0:
+                                hud_extra = f"Kurve {result.bend_angle_deg:.0f}°  off={result.offset_normalized:+.2f}"
+                            else:
+                                hud_extra = ""
 
-                        prev_error = result.offset_normalized
-
-                        if result.speed_factor < 1.0 and not result.in_dead_zone:
-                            hud_extra = f"Kurve {result.bend_angle_deg:.0f}°  off={result.offset_normalized:+.2f}"
-
-                        if DEBUG_PRINT_SPEED:
-                            logger.debug(
-                                "FOLLOW  off=%+.3f  stripe=%+.1f°  phase=%s  sf=%.2f",
-                                result.offset_normalized, stripe_angle,
-                                "ALIGN" if result.in_dead_zone else "APPROACH",
-                                result.speed_factor,
-                            )
+                    if DEBUG_PRINT_SPEED:
+                        phase_name = (
+                            "APPROACH" if not result.in_dead_zone else
+                            "ALIGN"    if not stripe_aligned       else
+                            "FOLLOW"
+                        )
+                        logger.debug(
+                            "FOLLOW  off=%+.3f  stripe=%+.1f°  phase=%s  sf=%.2f",
+                            result.offset_normalized, stripe_angle,
+                            phase_name,
+                            result.speed_factor,
+                        )
 
             # ── FPS ───────────────────────────────────────────────────────────
             if frame_count % 30 == 0:
