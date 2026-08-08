@@ -64,6 +64,25 @@ DEAD_ZONE_RATIO = 0.167             # mittleres Drittel = ±1/6 der Framebreite
 KP = 0.55                          # Proportionaler Anteil  (war 0.0025 → viel zu klein!)
 KD = 0.10                          # Differenzialer Anteil (dämpft Überschwingen)
 
+# ── Streifen-Ausrichtung (Winkelkorrektur) ────────────────────────────────────
+# Problem: Rover fährt parallel zum Streifen statt entlang.
+# Ursache: PD-Regler korrigiert nur den lateralen X-Versatz, nicht den Winkel.
+#
+# Lösung: fitLine() berechnet den Winkel des Streifens zur Vertikalen.
+#   0°  = Streifen senkrecht im Bild  = Rover korrekt ausgerichtet
+#   90° = Streifen waagrecht im Bild  = Rover fährt quer zum Pfad
+#
+# Der Winkel wird als zweiter Fehlerterm zum PD-Regler addiert, sodass der
+# Rover sich gleichzeitig dreht UND vorwärtsfährt – ohne anzuhalten.
+#
+# STRIPE_ALIGN_KP:      Verstärkung der Winkelkorrektur.
+#                       Kleiner als KP → Winkel hat weniger Einfluss als lateraler Versatz.
+#                       Zu hoch: Rover schwingt. Startwert: 0.30
+# STRIPE_ALIGN_TOL_DEG: Unter diesem Winkel keine Korrektur ("senkrecht genug").
+#                       Zu klein: Rover zittert. Zu groß: Rover bleibt schräg.
+STRIPE_ALIGN_KP      = 0.30        # Winkel-Verstärkung (unabhängig von KP)
+STRIPE_ALIGN_TOL_DEG = 12.0        # Toleranz in Grad – darunter keine Winkelkorrektur
+
 # ── Knick-Erkennung & Geschwindigkeitsanpassung ──────────────────────────────
 # Der Knickwinkel wird aus dem Unterschied zwischen dem nahen und fernen
 # Pfad-Schwerpunkt im ROI berechnet (in Grad).
