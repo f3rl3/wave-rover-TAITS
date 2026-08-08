@@ -13,6 +13,7 @@ from config import (
     FRAME_WIDTH, FRAME_HEIGHT,
     BEND_SLOW_DEG, BEND_STOP_DEG, SPEED_MIN_FACTOR,
     RED_DETECT_Y_START,
+    FAR_ZONE_END, NEAR_ZONE_START, NEAR_ZONE_END,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,10 +24,6 @@ _RED_LOW2  = np.array((165, 140,  80), dtype=np.uint8)   # upper red   (H near 1
 _RED_HIGH2 = np.array((180, 255, 255), dtype=np.uint8)
 
 MIN_RED_AREA = 10_000
-
-FAR_ZONE_END     = 0.20
-NEAR_ZONE_START  = 0.40
-NEAR_ZONE_END    = 0.75
 
 @dataclass
 class PathResult:
@@ -64,9 +61,23 @@ class PathDetector:
         self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         self._last_mask: Optional[np.ndarray] = None   # Cache: mask of the last frame
 
+    # --- Public properties ---
+
+    @property
+    def roi_top(self) -> int:
+        return self._roi_y_top
+
+    @property
+    def roi_bottom(self) -> int:
+        return self._roi_y_bottom
+
+    @property
+    def dead_zone_px(self) -> int:
+        return self._dead_zone_px
+
     # --- API ---
 
-    def process(self, frame: np.ndarray) -> Tuple[PathResult, np.ndarray]:
+    def process(self, frame: np.ndarray) -> PathResult:
         h, w = frame.shape[:2]
         self._update_roi(h, w)
 
@@ -85,8 +96,7 @@ class PathDetector:
             self._calc_bend(mask, result, w, roi_h)
             result.stripe_angle_deg = self._calc_stripe_angle(mask)
 
-        debug = self._draw_overlay(frame.copy(), mask, result, w, h, roi_h)
-        return result, debug
+        return result
 
     def get_last_mask(self) -> Optional[np.ndarray]:
         return self._last_mask
@@ -232,111 +242,3 @@ class PathDetector:
             result.speed_factor  = 1.0 - ratio * (1.0 - SPEED_MIN_FACTOR)
             result.is_sharp_bend = False
 
-    # --- Debug-Overlay ---
-    def _draw_overlay(self, frame: np.ndarray, mask: np.ndarray,
-                      result: PathResult, w: int, h: int, roi_h: int) -> np.ndarray:
-        """Draws all debug overlays (adapted for downward-facing camera)."""
-
-        rt = self._roi_y_top
-        rb = self._roi_y_bottom
-
-        # ROI frame
-        cv2.rectangle(frame, (0, rt), (w, rb), (255, 200, 0), 2)
-
-        # Green mask as transparent overlay
-        roi_region = frame[rt:rb, :]
-        overlay    = np.zeros_like(roi_region)
-        overlay[mask > 0] = (0, 255, 0)
-        cv2.addWeighted(roi_region, 0.7, overlay, 0.3, 0, dst=frame[rt:rb, :])
-
-        # Center line + dead zone
-        mid = w // 2
-        dz  = self._dead_zone_px
-        cv2.line(frame, (mid, rt), (mid, rb), (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.line(frame, (mid - dz, rt), (mid - dz, rb), (100, 100, 255), 1)
-        cv2.line(frame, (mid + dz, rt), (mid + dz, rb), (100, 100, 255), 1)
-
-        # Zone lines & labels
-        far_y       = rt + int(roi_h * FAR_ZONE_END)
-        near_top_y  = rt + int(roi_h * NEAR_ZONE_START)
-        near_bot_y  = rt + int(roi_h * NEAR_ZONE_END)
-
-        # FAR zone
-        cv2.line(frame, (0, far_y), (w, far_y), (255, 80, 80), 1)
-        cv2.putText(frame, "FAR (ahead)", (5, far_y - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 80, 80), 1)
-
-        # NEAR zone
-        cv2.rectangle(frame, (0, near_top_y), (w, near_bot_y), (50, 160, 220), 1)
-        cv2.putText(frame, "NEAR (under rover)", (5, near_top_y + 13),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (50, 160, 220), 1)
-
-        # Direction of travel arrow
-        arr_x = w - 22
-        cv2.arrowedLine(frame, (arr_x, rb - 10), (arr_x, rt + 10),
-                        (180, 180, 180), 1, tipLength=0.15)
-        cv2.putText(frame, "fwd", (arr_x - 12, rt + 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, (180, 180, 180), 1)
-
-        if result.found:
-            # Steering origin
-            cv2.drawMarker(frame, (result.centroid_x, result.centroid_y),
-                           (0, 255, 255), cv2.MARKER_CROSS, 22, 2)
-
-            # NEAR/FAR centroids + arrow
-            if result.near_cx is not None and result.far_cx is not None:
-                near_cy = (near_top_y + near_bot_y) // 2
-                far_cy  = rt + int(roi_h * FAR_ZONE_END) // 2
-
-                cv2.circle(frame, (result.near_cx, near_cy), 7, (50, 200, 255), -1)  # blue = NEAR
-                cv2.circle(frame, (result.far_cx,  far_cy),  7, (255, 80,  80), -1)  # red  = FAR
-
-                bend_col = (0, 255, 0) if not result.is_sharp_bend else (0, 0, 255)
-                cv2.arrowedLine(frame,
-                                (result.near_cx, near_cy),
-                                (result.far_cx,  far_cy),
-                                bend_col, 2, tipLength=0.2)
-
-            # --- Text ---
-            off_pct = result.offset_normalized * 100
-            sf      = result.speed_factor
-
-            off_col = (0, 255, 0) if result.in_dead_zone else (0, 165, 255)
-            cv2.putText(frame, f"Offset: {off_pct:+.1f}%",
-                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.62, off_col, 2)
-
-            if result.is_sharp_bend:
-                btxt = f"BEND {result.bend_angle_deg:.1f}° ({result.bend_direction}) ► ALIGN"
-                bcol = (0, 0, 255)
-            elif result.bend_angle_deg > BEND_SLOW_DEG:
-                btxt = f"Curve {result.bend_angle_deg:.1f}°  Speed x{sf:.2f}"
-                bcol = (0, 140, 255)
-            else:
-                btxt = f"Angle {result.bend_angle_deg:.1f}°  Speed x{sf:.2f}"
-                bcol = (180, 255, 180)
-
-            cv2.putText(frame, btxt, (10, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.62, bcol, 2)
-
-            # --- Stripe alignment line ---
-            angle     = result.stripe_angle_deg
-            angle_rad = math.radians(angle)
-            lx = math.sin(angle_rad)
-            ly = -math.cos(angle_rad)
-            cx_l = result.centroid_x if result.centroid_x is not None else w // 2
-            cy_l = (rt + rb) // 2
-            arm  = (rb - rt) // 2 - 5
-            cv2.line(frame,
-                     (int(cx_l - lx * arm), int(cy_l - ly * arm)),
-                     (int(cx_l + lx * arm), int(cy_l + ly * arm)),
-                     (0, 220, 220) if result.in_dead_zone else (80, 80, 200),
-                     2, cv2.LINE_AA)
-            cv2.putText(frame, f"{angle:+.0f}deg",
-                        (cx_l + 6, cy_l - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42,
-                        (0, 220, 220) if result.in_dead_zone else (80, 80, 200), 1)
-        else:
-            cv2.putText(frame, "PATH NOT FOUND",
-                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
-
-        return frame

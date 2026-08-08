@@ -19,6 +19,11 @@ MIN_GREEN_AREA = 2000 # in Pixel
 ROI_TOP_RATIO    = 0.03             # Small margin at top
 ROI_BOTTOM_RATIO = 0.90             # Cut off bottom 10%
 
+# --- Zone ratios (relative to ROI height) ---
+FAR_ZONE_END    = 0.20              # Top 20% of ROI = FAR zone
+NEAR_ZONE_START = 0.40              # NEAR zone starts at 40%
+NEAR_ZONE_END   = 0.75              # NEAR zone ends at 75%
+
 # --- Driving speeds ---
 # Wave Rover speeds: -1.0 to 1.0
 SPEED_FORWARD   = 0.20

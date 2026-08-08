@@ -26,6 +26,7 @@ from config import (
 from rover_controller import RoverController
 from path_detector    import PathDetector
 from debug_server     import DebugServer
+from overlay          import draw_debug_frame
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,31 +91,6 @@ def open_camera() -> cv2.VideoCapture:
     actual_fps = cap.get(cv2.CAP_PROP_FPS)
     logger.info("Camera: %dx%d @ %.0f FPS", actual_w, actual_h, actual_fps)
     return cap
-
-STATE_COLORS = {
-    State.FOLLOWING:   (0,   220,   0),
-    State.SEARCHING:   (0,   165, 255),
-    State.PAUSED:      (0,     0, 220),
-    State.RED_STOP:    (0,     0, 200),
-    State.TURNING_180: (0,   200, 200),
-    State.RETURNING:   (180, 220,   0),
-    State.TERMINAL:    (60,   60,  60),
-}
-
-def draw_hud_on_video(frame, state: str, speed: float, extra: str = ""):
-    h, w = frame.shape[:2]
-    color = STATE_COLORS.get(state, (200, 200, 200))
-
-    cv2.rectangle(frame, (0, h - 55), (w, h), (30, 30, 30), -1)
-
-    label = f"[{state}]"
-    if extra:
-        label += f"  {extra}"
-    cv2.putText(frame, label, (10, h - 32),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.70, color, 2)
-    cv2.putText(frame, f"Speed-Base: {speed:.2f}",
-                (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
-
 
 # --- Main program ---
 def parse_args():
@@ -220,7 +196,7 @@ def main():
             now = time.time()
 
             # --- Pfaderkennung ---
-            result, debug_frame = detector.process(frame)
+            result = detector.process(frame)
 
             # Check for red marking, only relevant while driving
             red_detected  = False
@@ -229,19 +205,6 @@ def main():
                 red_detected, red_area_last = detector.detect_red(frame)
                 if frame_count % 30 == 0 and red_area_last > 0:
                     logger.debug("red_px=%d  (threshold=%d)", red_area_last, 10_000)
-
-            # Draw red marking overlay on debug frame
-            if red_detected or (state in (State.RED_STOP, State.TURNING_180, State.TERMINAL)):
-                h_f, w_f = debug_frame.shape[:2]
-                cv2.rectangle(debug_frame, (0, 0), (w_f, 30), (0, 0, 180), -1)
-                cv2.putText(debug_frame, f"RED detected  ({red_area_last} px)",
-                            (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-            elif red_on_cooldown:
-                remaining_cd = red_cooldown_end_t - now
-                h_f, w_f = debug_frame.shape[:2]
-                cv2.rectangle(debug_frame, (0, 0), (w_f, 30), (40, 40, 120), -1)
-                cv2.putText(debug_frame, f"RED locked  {remaining_cd:.0f}s remaining",
-                            (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (180, 180, 255), 2)
 
             # --- State machine ---
             hud_extra = ""
@@ -459,6 +422,24 @@ def main():
                 fps_display = 30.0 / max(now - fps_t, 1e-9)
                 fps_t = now
 
+            # --- Build debug frame (all overlays + HUD baked in) ---
+            debug_frame = draw_debug_frame(
+                frame.copy(),
+                detector.get_last_mask(),
+                result,
+                roi_top=detector.roi_top,
+                roi_bottom=detector.roi_bottom,
+                dead_zone_px=detector.dead_zone_px,
+                state=state,
+                base_speed=base_speed,
+                hud_extra=hud_extra,
+                fps=fps_display,
+                red_detected=red_detected,
+                red_area_last=red_area_last,
+                red_on_cooldown=red_on_cooldown,
+                red_cooldown_remaining=(red_cooldown_end_t - now) if red_on_cooldown else 0.0,
+            )
+
             # --- Update web debug server ---
             if debug_srv is not None:
                 current_speed = base_speed * (result.speed_factor if result.found else 1.0)
@@ -487,14 +468,8 @@ def main():
                         "frame_count":    frame_count,
                     }
                 )
-            cv2.putText(debug_frame,
-                        f"FPS {fps_display:.1f}",
-                        (debug_frame.shape[1] - 95, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
-
             # --- Debug output ---
             if use_window:
-                draw_hud_on_video(debug_frame, state, base_speed, hud_extra)
                 cv2.imshow("Wave Rover Path-Follower", debug_frame)
 
                 if show_mask:
