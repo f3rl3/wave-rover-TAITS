@@ -100,7 +100,7 @@ def benchmark_one(cap: cv2.VideoCapture, detector: PathDetector,
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     ratio    = aspect_label(actual_w, actual_h)
 
-    print(f"  {width}×{height:>4}  →  tatsächlich {actual_w}×{actual_h}  [{ratio}]")
+    print(f"  {width}x{height:>4}  ->  tatsaechlich {actual_w}x{actual_h}  [{ratio}]")
 
     capture_ms_list = []
     process_ms_list = []
@@ -111,7 +111,7 @@ def benchmark_one(cap: cv2.VideoCapture, detector: PathDetector,
         t1 = time.perf_counter()
 
         if not ret or frame is None:
-            print(f"    ⚠ Kein Frame – überspringe diese Auflösung")
+            print(f"    [!] Kein Frame - ueberspringe diese Aufloesung")
             return None
 
         detector.process(frame)
@@ -131,7 +131,7 @@ def benchmark_one(cap: cv2.VideoCapture, detector: PathDetector,
     fps      = 1000.0 / avg_tot if avg_tot > 0 else 0
 
     print(f"    capture {avg_cap:5.1f} ms  +  process {avg_proc:5.1f} ms  "
-          f"=  {avg_tot:5.1f} ms/Frame  →  {fps:.1f} FPS")
+          f"=  {avg_tot:5.1f} ms/Frame  ->  {fps:.1f} FPS")
 
     return {
         "group":        group_name,
@@ -168,7 +168,7 @@ def main():
     if not cap.isOpened():
         cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
-        print("❌ Kamera konnte nicht geöffnet werden!")
+        print("[FEHLER] Kamera konnte nicht geoeffnet werden!")
         return
 
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -177,7 +177,7 @@ def main():
     all_results = []
 
     for group in RESOLUTION_GROUPS:
-        print(f"\n── Gruppe: {group['name']} ──────────────────────────────")
+        print(f"\n-- Gruppe: {group['name']} ------------------------------")
         for w, h in group["resolutions"]:
             r = benchmark_one(cap, detector, w, h, args.frames, group["name"])
             if r:
@@ -194,11 +194,11 @@ def main():
     }
     OUTPUT_FILE.write_text(json.dumps(output, indent=2), encoding="utf-8")
 
-    print(f"\n✅ Ergebnisse gespeichert: {OUTPUT_FILE}")
+    print(f"\n[OK] Ergebnisse gespeichert: {OUTPUT_FILE}")
     print("   Diagramm erstellen:  python plot_results.py")
 
     # Zusammenfassung pro Gruppe
-    print("\n── Zusammenfassung ──────────────────────────────────────────")
+    print("\n-- Zusammenfassung ------------------------------------------")
     current_group = None
     for r in all_results:
         if r["group"] != current_group:
