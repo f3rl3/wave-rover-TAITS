@@ -13,7 +13,7 @@ TARGET_FPS     = 30
 # --- Green detection (HSV color space) ---
 # OpenCV Hue: 0=Red, 30=Yellow, 60=Green, 90=Cyan, 120=Blue
 GREEN_HSV_LOW  = (65,  60,  40)     # Minimum Hue, Saturation, Value
-GREEN_HSV_HIGH = (95, 255, 255)     # Maximum Hue, Saturation, Value
+GREEN_HSV_HIGH = (90, 255, 255)     # Maximum Hue, Saturation, Value
 
 MIN_GREEN_AREA = 2000 # in Pixel
 
