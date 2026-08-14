@@ -1,5 +1,5 @@
 # --- Rover Network ---
-ROVER_IP   = "192.168.50.11"
+ROVER_IP   = "192.168.50.62"
 ROVER_PORT = 80
 ROVER_URL  = f"http://{ROVER_IP}:{ROVER_PORT}/js"
 HTTP_TIMEOUT = 0.3
