@@ -8,6 +8,8 @@ import cv2
 import time
 import logging
 import sys
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from config import (
@@ -128,6 +130,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    start_time = time.time()   # metrics: wall-clock start
 
     use_web_server = args.web    if args.web    is not None else DEBUG_WEB_SERVER
     use_window     = args.window if args.window is not None else DEBUG_WINDOW
@@ -147,6 +150,8 @@ def main():
         logger.warning("Simulation mode - no rover commands will be sent")
 
     cap      = open_camera()
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))   # metrics: actual resolution
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     detector = PathDetector()
 
     # --- Start web debug server ---
@@ -182,6 +187,7 @@ def main():
     frame_count    = 0
     fps_t          = time.time()
     fps_display    = 0.0
+    search_count   = 0    # metrics: number of times path was lost → SEARCHING
 
     logger.info("Running - waiting for stripe...")
 
@@ -338,6 +344,7 @@ def main():
                             lost, last_seen_side
                         )
                         state        = State.SEARCHING
+                        search_count += 1
                         search_dir   = last_seen_side
                         heading.reset()
                         rover.stop()
@@ -527,6 +534,30 @@ def main():
         time.sleep(0.2)
         cap.release()
         cv2.destroyAllWindows()
+
+        # ── Write run metrics ─────────────────────────────────────────────
+        total_s = time.time() - start_time
+        cps     = frame_count / total_s if total_s > 0 else 0.0
+        ts      = datetime.now().strftime("%Y-%m-%d  %H:%M:%S")
+        sep     = "=" * 52
+
+        metrics_text = (
+            f"\n{sep}\n"
+            f"Run: {ts}\n"
+            f"{sep}\n"
+            f"Resolution             : {actual_w} x {actual_h}\n"
+            f"Total runtime          : {total_s:.1f} s\n"
+            f"Total checks           : {frame_count}\n"
+            f"Checks per second (CPS): {cps:.1f}\n"
+            f"Path losses (SEARCHING): {search_count}\n"
+            f"{sep}\n"
+        )
+
+        metrics_path = Path(__file__).parent / "metrics.txt"
+        with open(metrics_path, "a", encoding="utf-8") as f:
+            f.write(metrics_text)
+
+        logger.info("Metrics written -> %s", metrics_path.name)
         logger.info("Done.")
 
 
