@@ -11,8 +11,10 @@ FRAME_HEIGHT   = 480
 TARGET_FPS     = 30
 
 # --- Green detection (HSV color space) ---
-GREEN_HSV_LOW  = (35,  80,  60)     # Minimum Hue, Saturation, Value
-GREEN_HSV_HIGH = (85, 255, 255)
+# OpenCV Hue: 0=Red, 30=Yellow, 60=Green, 90=Cyan, 120=Blue
+# The stripe is teal/cyan-green → Hue ~85-100 in OpenCV scale.
+GREEN_HSV_LOW  = (65,  60,  40)     # Minimum Hue, Saturation, Value
+GREEN_HSV_HIGH = (100, 255, 255)
 
 MIN_GREEN_AREA = 2000 # in Pixel
 
