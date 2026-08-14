@@ -39,25 +39,19 @@ DEAD_ZONE_RATIO = 0.167
 KP = 0.55                          # Proportional component
 KD = 0.10                          # Differential component (dampens overshoot)
 
-# --- Stripe alignment (angle correction) ---
-STRIPE_ALIGN_TOL_DEG  = 12.0         # Phase-2 ENTRY  (degrees): rotates when angle > X°
-STRIPE_ALIGN_EXIT_DEG =  6.0         # Phase-2 EXIT  (degrees): continues when angle < X°
-STRIPE_ALIGN_TIMEOUT_S = 1.5         # Deadlock protection: abort Phase 2 after X sec
-STRIPE_ALIGN_BOOST_S   = 1.5         # After timeout: drive at full speed for X sec
-STRIPE_ALIGN_SPD      =  0.18        # Rotation speed Phase 2 (0.0-1.0)
-
 # --- Stuck detection ---
 # If the rover makes no forward movement for X seconds,
 # the pathfinding is completely reset.
 STUCK_RESET_S = 10.0                 # Seconds until pathfinding reset
 
 # --- Bend detection & speed adjustment ---
-BEND_SLOW_DEG     = 15.0           # From this angle: slow down
-BEND_STOP_DEG     = 32.0           # From this angle: stop and align
-BEND_ALIGN_DEG    =  8.0           # Alignment complete when angle < X°
+# speed_factor goes from 1.0 (straight) down to SPEED_MIN_FACTOR (sharp bend),
+# linearly between BEND_SLOW_DEG and BEND_STOP_DEG. This factor is the only
+# thing that reacts to a bend/kink in the path - no separate alignment
+# maneuver, just base_speed * speed_factor fed into the normal PD steering.
+BEND_SLOW_DEG     = 15.0           # From this angle: start slowing down
+BEND_STOP_DEG     = 32.0           # From this angle: speed_factor = 0 (PD correction alone pivots the rover)
 SPEED_MIN_FACTOR  =  0.30          # Minimum speed factor when braking
-ALIGN_ROTATE_SPD  =  0.22          # Rotation speed when aligning
-ALIGN_TIMEOUT_S   =  6.0           # Maximum alignment time
 
 # --- Rotation tracking ---
 ROTATE_DEG_PER_SEC   = 50.0       # Degrees/second at turn_in_place

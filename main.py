@@ -17,8 +17,6 @@ from config import (
     KP, KD,
     ROTATE_DEG_PER_SEC, MAX_ALIGN_ROTATION_DEG, MAX_SEARCH_ROTATION_DEG,
     RED_STOP_WAIT_S, TURN_180_SPD, RED_COOLDOWN_S,
-    STRIPE_ALIGN_TOL_DEG, STRIPE_ALIGN_EXIT_DEG, STRIPE_ALIGN_TIMEOUT_S,
-    STRIPE_ALIGN_BOOST_S, STRIPE_ALIGN_SPD,
     STUCK_RESET_S,
     DEBUG_WINDOW, DEBUG_SHOW_MASK, DEBUG_PRINT_SPEED,
     DEBUG_WEB_SERVER, DEBUG_SERVER_PORT, DEBUG_STREAM_FPS,
@@ -37,7 +35,6 @@ logger = logging.getLogger("main")
 
 class State:
     FOLLOWING   = "FOLLOWING"
-    ALIGNING    = "ALIGNING"
     SEARCHING   = "SEARCHING"
     # PAUSED      = "PAUSED"       # Manually paused
     RED_STOP    = "RED_STOP"
@@ -165,9 +162,6 @@ def main():
     show_mask      = DEBUG_SHOW_MASK
     show_red_mask  = False
     prev_error          = 0.0
-    aligning_stripe     = False   
-    align_stripe_t      = 0.0     
-    timeout_boost_end_t = 0.0     
     last_forward_t      = time.time()
 
     last_seen_t    = time.time()
@@ -228,7 +222,7 @@ def main():
                         RED_STOP_WAIT_S
                     )
                     state = State.TURNING_180
-                    heading.reset()
+                    heading.reset() 
 
             elif state == State.TURNING_180:
                 heading.update("left", now)
@@ -301,12 +295,9 @@ def main():
                         now - last_forward_t, follow_state,
                     )
 
-                    state               = follow_state
-                    aligning_stripe     = False
-                    align_stripe_t      = 0.0
-                    timeout_boost_end_t = 0.0
-                    prev_error          = 0.0
-                    last_forward_t      = now
+                    state          = follow_state
+                    prev_error     = 0.0
+                    last_forward_t = now
                     heading.reset()
                     rover.stop()
                     continue
@@ -347,73 +338,35 @@ def main():
                     if not result.in_dead_zone:
                         last_seen_side = "left" if result.offset_normalized < 0 else "right"
 
-                    stripe_angle = result.stripe_angle_deg
+                    # Single steering path, no separate "align in place" state:
+                    # the PD controller always drives, and its only speed input
+                    # is base_speed scaled down by how sharp the bend ahead is
+                    # (result.speed_factor, from the NEAR/FAR centroid angle in
+                    # path_detector). At a sharp bend speed_factor -> 0, so the
+                    # PD correction alone pivots the rover - no extra rotation
+                    # state that has to guess/track how far it actually turned.
+                    current_speed = base_speed * result.speed_factor
 
-                    if abs(stripe_angle) > STRIPE_ALIGN_TOL_DEG:
-                        if not aligning_stripe:
-                            align_stripe_t = now
-                        aligning_stripe = True
-                    elif abs(stripe_angle) < STRIPE_ALIGN_EXIT_DEG:
-                        aligning_stripe = False
-
-                    if aligning_stripe and (now - align_stripe_t) > STRIPE_ALIGN_TIMEOUT_S:
-                        logger.warning(
-                            "Phase-2 timeout after %.1fs (angle %+.1f°) - %.1fs full speed",
-                            STRIPE_ALIGN_TIMEOUT_S, stripe_angle, STRIPE_ALIGN_BOOST_S
-                        )
-                        aligning_stripe     = False
-                        timeout_boost_end_t = now + STRIPE_ALIGN_BOOST_S
-
-                    if not result.in_dead_zone:
-                        # aligning_stripe remains unchanged - Phase 2 continues
-                        # there once the stripe is centered again.
-                        rover.steer(
-                            base_speed,
-                            result.offset_normalized,
-                            turn_max=SPEED_TURN_MAX,
-                            kp=KP, kd=KD,
-                            prev_error=prev_error,
-                        )
-                        prev_error     = result.offset_normalized
-                        last_forward_t = now
-                        hud_extra      = f"Approaching  off={result.offset_normalized:+.2f}"
-
-                    elif aligning_stripe:
-                        align_dir_now = "right" if stripe_angle > 0 else "left"
-                        rover.turn_in_place(STRIPE_ALIGN_SPD, direction=align_dir_now)
-                        prev_error = 0.0
-                        hud_extra  = f"Aligning {stripe_angle:+.0f}° ({align_dir_now})"
-
-                    else:
-                        boost_active  = now < timeout_boost_end_t
-                        current_speed = base_speed if boost_active else base_speed * result.speed_factor
-
-                        rover.steer(
-                            current_speed,
-                            result.offset_normalized,
-                            turn_max=SPEED_TURN_MAX,
-                            kp=KP, kd=KD,
-                            prev_error=prev_error,
-                        )
-
-                        prev_error     = result.offset_normalized
-                        last_forward_t = now
-                        hud_extra      = (
-                            f"Curve {result.bend_angle_deg:.0f}°  off={result.offset_normalized:+.2f}"
-                            if result.speed_factor < 1.0 else
-                            f"BOOST {timeout_boost_end_t - now:.1f}s" if boost_active else ""
-                        )
+                    rover.steer(
+                        current_speed,
+                        result.offset_normalized,
+                        turn_max=SPEED_TURN_MAX,
+                        kp=KP, kd=KD,
+                        prev_error=prev_error,
+                    )
+                    prev_error     = result.offset_normalized
+                    last_forward_t = now
+                    hud_extra      = (
+                        f"Curve {result.bend_angle_deg:.0f}°  x{result.speed_factor:.2f}  "
+                        f"off={result.offset_normalized:+.2f}"
+                        if result.speed_factor < 1.0 else
+                        f"off={result.offset_normalized:+.2f}"
+                    )
 
                     if DEBUG_PRINT_SPEED:
-                        phase_name = (
-                            "APPROACH" if not result.in_dead_zone else
-                            "ALIGN"    if aligning_stripe          else
-                            "FOLLOW"
-                        )
                         logger.debug(
-                            "FOLLOW  off=%+.3f  stripe=%+.1f°  phase=%s  sf=%.2f",
-                            result.offset_normalized, stripe_angle,
-                            phase_name,
+                            "FOLLOW  off=%+.3f  bend=%.1f°  sf=%.2f",
+                            result.offset_normalized, result.bend_angle_deg,
                             result.speed_factor,
                         )
 
